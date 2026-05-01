@@ -71,6 +71,11 @@ func NewNqHandshake(
 		hs.s = ho.staticKey
 	}
 
+	// Set pre-existing ephemeral key (standard Noise API, matches Rust e: Option<KeyPair>)
+	if ho.ephemeralKey != nil {
+		hs.e = ho.ephemeralKey
+	}
+
 	// Set remote static public key
 	if ho.remoteStatic != nil {
 		hs.rs = &KeyPair{Public: ho.remoteStatic}
@@ -513,20 +518,19 @@ func (hs *NqHandshake) processReadToken(token Token, reader *messageReader) erro
 	}
 }
 
-// writeTokenE generates ephemeral key, writes pubkey, mixes.
-// F12: Ephemeral generated HERE, inside WriteMessage.
+// writeTokenE generates or uses pre-set ephemeral key, writes pubkey, mixes.
+// F12: Ephemeral generated HERE, inside WriteMessage (unless pre-set via WithEphemeralKey).
 // F57: Sets ownRandApplied.
 func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
-	if hs.e != nil {
-		return 0, fmt.Errorf("%w: ephemeral already set", ErrInvalidState)
+	if hs.e == nil {
+		// No pre-set ephemeral: generate fresh (normal production path)
+		kp, err := hs.dh.GenerateKeypair(hs.rng)
+		if err != nil {
+			return 0, fmt.Errorf("%w: ephemeral keygen: %v", ErrDH, err)
+		}
+		hs.e = &kp
 	}
-
-	kp, err := hs.dh.GenerateKeypair(hs.rng)
-	if err != nil {
-		return 0, fmt.Errorf("%w: ephemeral keygen: %v", ErrDH, err)
-	}
-
-	hs.e = &kp
+	// else: pre-set via WithEphemeralKey (test vector path, matches Rust e: Option<KeyPair>)
 
 	// Mix into handshake hash (Rust order: MixHash -> MixKey -> copy -> set flag)
 	hs.symmetricState.MixHash(hs.e.Public)

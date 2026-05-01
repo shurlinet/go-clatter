@@ -638,19 +638,19 @@ func TestNqHandshake_OverheadAccuracy(t *testing.T) {
 // --- Interop vector tests ---
 
 func TestNqHandshake_VectorNN(t *testing.T) {
-	runNqVectorTest(t, "testdata/vectors/nq_nn_chacha_sha256.txt")
+	runNqVectorTest(t, "vectors/nq_nn_chacha_sha256.txt")
 }
 
 func TestNqHandshake_VectorXX(t *testing.T) {
-	runNqVectorTest(t, "testdata/vectors/nq_xx_chacha_sha256.txt")
+	runNqVectorTest(t, "vectors/nq_xx_chacha_sha256.txt")
 }
 
 func TestNqHandshake_VectorIK(t *testing.T) {
-	runNqVectorTest(t, "testdata/vectors/nq_ik_aes_sha512.txt")
+	runNqVectorTest(t, "vectors/nq_ik_aes_sha512.txt")
 }
 
 func TestNqHandshake_VectorNNpsk2(t *testing.T) {
-	runNqVectorTest(t, "testdata/vectors/nq_nnpsk2_chacha_sha256.txt")
+	runNqVectorTest(t, "vectors/nq_nnpsk2_chacha_sha256.txt")
 }
 
 func runNqVectorTest(t *testing.T, path string) {

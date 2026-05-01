@@ -289,11 +289,11 @@ func TestPqHandshake_NNpsk2_RoundTrip(t *testing.T) {
 // --- Interop vector tests ---
 
 func TestPqHandshake_VectorXX(t *testing.T) {
-	runPqVectorTest(t, "testdata/vectors/pq_xx_mlkem768_chacha_sha256.txt")
+	runPqVectorTest(t, "vectors/pq_xx_mlkem768_chacha_sha256.txt")
 }
 
 func TestPqHandshake_VectorIK(t *testing.T) {
-	runPqVectorTest(t, "testdata/vectors/pq_ik_mlkem768_aes_sha512.txt")
+	runPqVectorTest(t, "vectors/pq_ik_mlkem768_aes_sha512.txt")
 }
 
 func runPqVectorTest(t *testing.T, path string) {

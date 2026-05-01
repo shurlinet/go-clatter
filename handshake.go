@@ -327,6 +327,7 @@ type Option func(*handshakeOptions)
 
 type handshakeOptions struct {
 	staticKey       *KeyPair
+	ephemeralKey    *KeyPair // Pre-set ephemeral keypair (standard Noise API, matches Rust e: Option<KeyPair>)
 	remoteStatic    []byte
 	staticKEM       *KeyPair // Hybrid: local static KEM keypair
 	remoteStaticKEM []byte   // Hybrid: remote static KEM public key
@@ -339,6 +340,20 @@ func WithStaticKey(kp KeyPair) Option {
 	return func(o *handshakeOptions) {
 		clone := kp.Clone()
 		o.staticKey = &clone
+	}
+}
+
+// WithEphemeralKey sets a pre-existing ephemeral keypair for the handshake.
+// This is a standard Noise API feature (matches Rust Clatter's e: Option<KeyPair>
+// constructor parameter, nq.rs line 72). When set, WriteMessage uses this key
+// instead of generating a fresh one for Token::E.
+//
+// Primary use: cross-implementation test vectors (Cacophony, Snow) which require
+// deterministic ephemeral keys for byte-for-byte ciphertext verification.
+func WithEphemeralKey(kp KeyPair) Option {
+	return func(o *handshakeOptions) {
+		clone := kp.Clone()
+		o.ephemeralKey = &clone
 	}
 }
 
