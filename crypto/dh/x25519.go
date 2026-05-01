@@ -18,7 +18,7 @@ func (x *X25519) Name() string   { return "25519" }
 func (x *X25519) PubKeyLen() int { return 32 }
 
 // GenerateKeypair reads 32 bytes from rng as a private key scalar.
-// Uses ecdh.X25519().NewPrivateKey (F174: GenerateKey ignores rand in Go 1.26).
+// Uses ecdh.X25519().NewPrivateKey (GenerateKey ignores rand in Go 1.26).
 func (x *X25519) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 	var seed [32]byte
 	defer func() {
@@ -39,7 +39,7 @@ func (x *X25519) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 	return clatter.NewKeyPair(privKey.PublicKey().Bytes(), privKey.Bytes()), nil
 }
 
-// DH performs X25519 DH. Returns zeros on low-order point (F84).
+// DH performs X25519 DH. Returns zeros on low-order point.
 func (x *X25519) DH(kp clatter.KeyPair, pubkey []byte) ([]byte, error) {
 	privKey, err := ecdh.X25519().NewPrivateKey(kp.SecretSlice())
 	if err != nil {

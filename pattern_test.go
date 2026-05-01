@@ -22,7 +22,7 @@ func TestAllPatternsHaveNames(t *testing.T) {
 	}
 }
 
-// TestPatternTypeDetection verifies F113 auto-detection from tokens.
+// TestPatternTypeDetection verifies auto-detection from tokens.
 func TestPatternTypeDetection(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -57,7 +57,7 @@ func TestPatternTypeDetection(t *testing.T) {
 	}
 }
 
-// TestPSKDetection verifies F116 cached PSK scan.
+// TestPSKDetection verifies cached PSK scan.
 func TestPSKDetection(t *testing.T) {
 	// Non-PSK patterns
 	noPSK := []*HandshakePattern{
@@ -85,7 +85,7 @@ func TestPSKDetection(t *testing.T) {
 	}
 }
 
-// TestOneWayPatterns verifies F139: one-way patterns are NQ-only.
+// TestOneWayPatterns verifies one-way patterns are NQ-only.
 func TestOneWayPatterns(t *testing.T) {
 	oneWay := []*HandshakePattern{
 		PatternN, PatternK, PatternX,

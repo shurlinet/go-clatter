@@ -393,7 +393,7 @@ func TestNqHandshake_HandshakeHashMatch(t *testing.T) {
 	}
 }
 
-// --- One-way pattern tests (F139: one-way is NQ-only) ---
+// --- One-way pattern tests (one-way is NQ-only) ---
 
 func TestNqHandshake_OneWayN(t *testing.T) {
 	suite := suiteChachaSha256()
@@ -660,7 +660,7 @@ func runNqVectorTest(t *testing.T, path string) {
 	suite := lookupSuite(t, v)
 	pattern := lookupPattern(t, v.pattern)
 
-	// F178: Rust uses a SINGLE global DummyRng counter shared by both sides.
+	// Rust uses a SINGLE global DummyRng counter shared by both sides.
 	// Both initiator and responder draw from the same counter.
 	sharedRng := clatter.NewDummyRng(0xdeadbeef)
 

@@ -56,7 +56,7 @@ func newTestCipherState(t *testing.T) *CipherState {
 	return cs
 }
 
-// F109: CipherState starts at nonce 0.
+// CipherState starts at nonce 0.
 func TestCipherState_InitialNonce(t *testing.T) {
 	cs := newTestCipherState(t)
 	if cs.Nonce() != 0 {
@@ -64,7 +64,7 @@ func TestCipherState_InitialNonce(t *testing.T) {
 	}
 }
 
-// F168: Wrong key length returns error.
+// Wrong key length returns error.
 func TestCipherState_InvalidKeyLength(t *testing.T) {
 	_, err := NewCipherState(&testCipher{}, make([]byte, 16))
 	if err == nil {
@@ -80,7 +80,7 @@ func TestCipherState_HasKey(t *testing.T) {
 	}
 }
 
-// F165: nil CipherState HasKey returns false.
+// Nil CipherState HasKey returns false.
 func TestCipherState_NilHasKey(t *testing.T) {
 	var cs *CipherState
 	if cs.HasKey() {
@@ -130,7 +130,7 @@ func TestCipherState_NonceIncrements(t *testing.T) {
 	}
 }
 
-// F170: MaxUint64 nonce encrypts successfully, then blocks.
+// MaxUint64 nonce encrypts successfully, then blocks.
 func TestCipherState_NonceOverflow(t *testing.T) {
 	cs := newTestCipherState(t)
 	cs.setNonce(math.MaxUint64)
@@ -153,7 +153,7 @@ func TestCipherState_NonceOverflow(t *testing.T) {
 	}
 }
 
-// F170: Same overflow logic for decrypt.
+// Same overflow logic for decrypt.
 func TestCipherState_NonceOverflowDecrypt(t *testing.T) {
 	// Encrypt at MaxUint64, then try to decrypt at MaxUint64
 	key := bytes.Repeat([]byte{0x42}, KeyLen)
@@ -247,8 +247,8 @@ func TestCipherState_NilOperations(t *testing.T) {
 	}
 }
 
-// F54: Rekey uses MaxUint64 nonce, does NOT affect the counter nonce.
-// F135: Rekey does NOT reset nonce.
+// Rekey uses MaxUint64 nonce, does NOT affect the counter nonce.
+// Rekey does NOT reset nonce.
 func TestCipherState_RekeyDoesNotAffectNonce(t *testing.T) {
 	// Use a key with byte[0]=0 so XOR with zeros produces zeros,
 	// which differs from the original key (byte[0]=0, byte[1]=0xff).
@@ -270,7 +270,7 @@ func TestCipherState_RekeyDoesNotAffectNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Nonce should still be 42 (F135: rekey does NOT reset nonce)
+	// Nonce should still be 42 (rekey does NOT reset nonce)
 	if cs.Nonce() != 42 {
 		t.Fatalf("nonce after rekey: got %d, want 42", cs.Nonce())
 	}
@@ -291,7 +291,7 @@ func TestCipherState_DecryptTooShort(t *testing.T) {
 	}
 }
 
-// F27: setNonce is unexported (compile-time check - it's lowercase).
+// setNonce is unexported (compile-time check - it's lowercase).
 // This test verifies the method exists and works internally.
 func TestCipherState_SetNonceInternal(t *testing.T) {
 	cs := newTestCipherState(t)

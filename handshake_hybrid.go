@@ -12,43 +12,20 @@ var _ Handshaker = (*HybridHandshake)(nil)
 // Port of Rust Clatter's hybrid.rs. Combines classical DH and post-quantum
 // KEM operations in a single symmetric state, achieving true hybrid security.
 //
-// Token::E generates BOTH DH AND KEM ephemeral keypairs (F141).
-// Token::S sends BOTH DH AND KEM static public keys (F142/F155).
+// Token::E generates BOTH DH AND KEM ephemeral keypairs.
+// Token::S sends BOTH DH AND KEM static public keys, encrypted with sequential
+// nonces from the same CipherState.
 // DH tokens (EE/ES/SE/SS) perform classical DH and MixKey.
-// Ekem/Skem are identical to PQ module (F42/F43/F143/F158/F159).
+// Ekem is identical to PQ: MixHash + MixKey (ciphertext in plaintext).
+// Skem is identical to PQ: EncryptAndHash + MixKeyAndHash (ciphertext encrypted).
 //
-// Finding coverage:
-// F41:  Token::S encrypts DH and KEM pubkeys with same cipherstate, sequential nonces.
-// F42:  Ekem uses MixKey (2-output HKDF). Skem uses MixKeyAndHash (3-output HKDF).
-// F43:  Ekem ciphertext is plaintext (MixHash). Skem ciphertext is encrypted (EncryptAndHash).
-// F57:  ownRandApplied tracked for PSK validity.
-// F59:  Overhead includes DH+KEM sizes for E and S tokens.
-// F62:  Sticky error state, no recovery.
-// F65:  Pre-message E mixes 4 times when PSK (MixHash DH, MixHash KEM, MixKey DH, MixKey KEM).
-// F68:  has_key() changes during token processing - overhead simulation tracks this.
-// F69:  Skem read: decapsulate with DECRYPTED CT, not wire CT.
-// F81:  DH types in HandshakeInternals, KEM types as separate fields.
-// F86:  PSK validity check at Token::S, Token::Skem, and post-payload.
-// F90:  E, Ekem, and Skem all set ownRandApplied.
-// F141: Token::E generates BOTH DH AND KEM ephemeral keypairs.
-// F142: Token::S computes has_key ONCE, reuses for BOTH encrypt_and_hash calls.
-// F143: Ekem is plaintext (MixHash+MixKey), Skem is encrypted (EncryptAndHash+MixKeyAndHash).
-// F151: Payload encrypt/decrypt always LAST after all tokens.
-// F154: hybridBuildName is one of 5 format variants (this is the Hybrid variant).
-// F155: Pre-message Token::S = TWO MixHash calls (DH pubkey then KEM pubkey).
-// F156: Token::S overhead = tag_len*2 when has_key (one tag per pubkey).
-// F161: Pre-message Token::E = 2 ops (no PSK) or 4 ops (has PSK).
-// F162: Destroy() zeros ALL fields including KEM keypairs.
-// F164: setError() called on ANY failure.
-// F171: WriteMessage validates buffer size before processing.
-// F172: ReadMessage validates message length >= overhead before processing.
+// DH keypairs are stored in HandshakeInternals (s/e/rs/re).
+// KEM keypairs are stored in the Hybrid-specific fields (kemS/kemE/kemRS/kemRE).
 type HybridHandshake struct {
 	HandshakeInternals
 	dh DH // DH algorithm (X25519)
 
-	// F81: KEM keypairs stored separately from DH keypairs in HandshakeInternals.
-	// HandshakeInternals.s/e/rs/re hold DH keys.
-	// These fields hold KEM keys.
+	// KEM keypairs stored separately from DH keypairs in HandshakeInternals.
 	kemS  *KeyPair // local static KEM keypair (SKEM type)
 	kemE  *KeyPair // local ephemeral KEM keypair (EKEM type)
 	kemRS *KeyPair // remote static KEM public key (SKEM type)
@@ -90,7 +67,6 @@ func NewHybridHandshake(
 	hs.skem = suite.SKEM
 
 	// Build protocol name and initialize symmetric state
-	// F154: Hybrid dual-format build_name
 	name := hybridBuildName(pattern, suite)
 	hs.symmetricState = InitializeSymmetric(suite.Hash, suite.Cipher, name)
 
@@ -115,9 +91,9 @@ func NewHybridHandshake(
 		hs.kemRS = &KeyPair{Public: ho.remoteStaticKEM}
 	}
 
-	// Process pre-messages
-	// F155: Pre-message S mixes BOTH DH and KEM pubkeys.
-	// F65/F161: Pre-message E mixes 2 or 4 times depending on PSK.
+	// Process pre-messages.
+	// Pre-message S mixes BOTH DH and KEM pubkeys.
+	// Pre-message E mixes 2 or 4 times depending on PSK.
 	if err := hs.processPreMessages(); err != nil {
 		hs.Destroy()
 		return nil, err
@@ -130,8 +106,9 @@ func NewHybridHandshake(
 }
 
 // processPreMessages mixes pre-message tokens into the handshake hash.
-// F155: Pre-message Token::S = TWO MixHash calls (DH pubkey, then KEM pubkey).
-// F65/F161: Pre-message Token::E = MixHash(DH) + MixHash(KEM) + conditional MixKey(DH) + MixKey(KEM) when PSK.
+// Pre-message Token::S does TWO MixHash calls (DH pubkey, then KEM pubkey).
+// Pre-message Token::E does MixHash(DH) + MixHash(KEM), plus conditional
+// MixKey(DH) + MixKey(KEM) when the pattern uses PSKs.
 func (hs *HybridHandshake) processPreMessages() error {
 	// Initiator pre-messages
 	for _, token := range hs.pattern.PreInitiator() {
@@ -155,7 +132,7 @@ func (hs *HybridHandshake) processPreMessages() error {
 func (hs *HybridHandshake) processPreMessageToken(token Token, isLocal bool) error {
 	switch token {
 	case TokenS:
-		// F155: TWO MixHash calls - DH pubkey then KEM pubkey
+		// TWO MixHash calls: DH pubkey then KEM pubkey
 		if isLocal {
 			if hs.s == nil {
 				return fmt.Errorf("%w: pre-message s requires DH static key", ErrMissingKey)
@@ -177,7 +154,7 @@ func (hs *HybridHandshake) processPreMessageToken(token Token, isLocal bool) err
 		}
 
 	case TokenE:
-		// F65/F161: MixHash(DH) + MixHash(KEM), then if PSK: MixKey(DH) + MixKey(KEM)
+		// MixHash(DH) + MixHash(KEM), then if PSK: MixKey(DH) + MixKey(KEM)
 		if isLocal {
 			if hs.e == nil {
 				return fmt.Errorf("%w: pre-message e requires DH ephemeral key", ErrMissingKey)
@@ -221,11 +198,10 @@ func (hs *HybridHandshake) processPreMessageToken(token Token, isLocal bool) err
 }
 
 // WriteMessage writes the next handshake message.
-// F141: Token::E generates BOTH DH AND KEM ephemeral keypairs.
-// F142: Token::S encrypts BOTH pubkeys with has_key checked ONCE.
-// F151: Payload encrypted LAST after all tokens.
-// F164: setError called on ANY failure.
-// F171: Buffer size validated before processing.
+// Token::E generates BOTH DH AND KEM ephemeral keypairs.
+// Token::S encrypts BOTH pubkeys with HasKey checked once for consistency.
+// Acquires exclusive access. Validates buffer size before processing.
+// Payload is encrypted LAST after all tokens. State is zeroed on any failure.
 func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if err := hs.acquireUse(); err != nil {
 		return 0, err
@@ -239,7 +215,7 @@ func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 		return 0, ErrInvalidState
 	}
 
-	// F171: Check buffer size before processing
+	// Check buffer size before processing
 	overhead, err := hs.getNextMessageOverheadHybrid()
 	if err != nil {
 		hs.setError(err)
@@ -255,7 +231,7 @@ func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: need %d bytes, have %d", ErrBufferTooSmall, needed, len(out))
 	}
 
-	// F66: getNextMessage increments index BEFORE token processing
+	// getNextMessage increments index BEFORE token processing
 	tokens, err := hs.getNextMessage()
 	if err != nil {
 		hs.setError(err)
@@ -273,14 +249,14 @@ func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 		offset += n
 	}
 
-	// F86: Post-payload PSK validity check
+	// Post-payload PSK validity check
 	if len(payload) > 0 && hs.pskApplied && !hs.ownRandApplied {
 		err = fmt.Errorf("%w: PSK requires own randomness before payload", ErrPSKInvalid)
 		hs.setError(err)
 		return 0, err
 	}
 
-	// F151: Payload encrypted LAST after all tokens.
+	// Payload encrypted LAST after all tokens.
 	ct, encErr := hs.symmetricState.EncryptAndHash(payload)
 	if encErr != nil {
 		hs.setError(encErr)
@@ -295,9 +271,8 @@ func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 }
 
 // ReadMessage reads and processes an incoming handshake message.
-// F151: Payload decrypted LAST.
-// F164: setError called on ANY failure.
-// F172: Message length validated >= overhead before processing.
+// Acquires exclusive access. Validates message length >= overhead.
+// Payload is decrypted LAST. State is zeroed on any failure.
 func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 	if err := hs.acquireUse(); err != nil {
 		return 0, err
@@ -311,7 +286,7 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 		return 0, ErrInvalidState
 	}
 
-	// F172: Validate message length
+	// Validate message length
 	overhead, err := hs.getNextMessageOverheadHybrid()
 	if err != nil {
 		hs.setError(err)
@@ -328,14 +303,14 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 		return 0, err
 	}
 
-	// F66: getNextMessage increments index BEFORE token processing
+	// getNextMessage increments index BEFORE token processing
 	tokens, err := hs.getNextMessage()
 	if err != nil {
 		hs.setError(err)
 		return 0, err
 	}
 
-	// F160: messageReader for stateful parsing
+	// Stateful message parser
 	reader := newMessageReader(message)
 
 	for _, token := range tokens {
@@ -345,7 +320,7 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 		}
 	}
 
-	// F151: Payload decrypted LAST.
+	// Payload decrypted LAST.
 	remaining := reader.rest()
 	pt, decErr := hs.symmetricState.DecryptAndHash(remaining)
 	if decErr != nil {
@@ -369,8 +344,7 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 }
 
 // Finalize extracts transport keys and zeros handshake state.
-// F117: Sets finalized=true, prevents double-finalize.
-// F124: Requires HasKey (at least one MixKey occurred).
+// Can only be called once; subsequent calls return ErrAlreadyFinished.
 func (hs *HybridHandshake) Finalize() (*TransportState, error) {
 	if err := hs.acquireUse(); err != nil {
 		return nil, err
@@ -394,7 +368,7 @@ func (hs *HybridHandshake) Finalize() (*TransportState, error) {
 	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
 
 	hs.finalized = true
-	// F162: Zero ALL handshake state after finalize
+	// Zero ALL handshake state after finalize
 	hs.Destroy()
 
 	return ts, nil
@@ -408,8 +382,8 @@ func (hs *HybridHandshake) GetNextMessageOverhead() (int, error) {
 	return hs.getNextMessageOverheadHybrid()
 }
 
-// Destroy zeros ALL fields in the Hybrid handshake.
-// F128/F162: Zeros HandshakeInternals + Hybrid-specific DH and KEM fields.
+// Destroy zeros ALL fields in the Hybrid handshake, including the
+// HandshakeInternals, the DH reference, and all KEM keypairs.
 func (hs *HybridHandshake) Destroy() {
 	hs.HandshakeInternals.Destroy()
 	hs.dh = nil
@@ -432,9 +406,9 @@ func (hs *HybridHandshake) Destroy() {
 }
 
 // getNextMessageOverheadHybrid calculates overhead for the next Hybrid message.
-// F59: DH+KEM sizes for E and S tokens.
-// F68: Simulates has_key() changes during token processing for accurate overhead.
-// F156: Token::S adds tag_len*2 when has_key (one per pubkey).
+// Includes DH+KEM sizes for E and S tokens. Simulates HasKey state changes
+// during token processing for accurate overhead prediction.
+// Token::S adds TagLen*2 when HasKey (one tag per pubkey: DH and KEM).
 func (hs *HybridHandshake) getNextMessageOverheadHybrid() (int, error) {
 	// Peek at next message tokens without advancing index
 	var tokens []Token
@@ -474,28 +448,28 @@ func (hs *HybridHandshake) getNextMessageOverheadHybrid() (int, error) {
 	for _, token := range tokens {
 		switch token {
 		case TokenE:
-			// F141/F59: DH pubkey + KEM pubkey
+			// DH pubkey + KEM pubkey
 			overhead += hs.dh.PubKeyLen()
 			overhead += hs.ekem.PubKeyLen()
 			if hasPSK {
 				hasKey = true
 			}
 		case TokenS:
-			// F156: DH pubkey + KEM pubkey, each with tag when has_key
+			// DH pubkey + KEM pubkey, each with tag when HasKey
 			overhead += hs.dh.PubKeyLen()
 			overhead += hs.skem.PubKeyLen()
 			if hasKey {
-				overhead += TagLen * 2 // F156: one tag per pubkey
+				overhead += TagLen * 2 // one tag per pubkey
 			}
 		case TokenEE, TokenES, TokenSE, TokenSS:
 			// DH tokens establish keys but add no wire bytes
 			hasKey = true
 		case TokenEkem:
-			// F43: Ekem ciphertext is plaintext
+			// Ekem ciphertext is plaintext (MixHash only)
 			overhead += hs.ekem.CiphertextLen()
 			hasKey = true
 		case TokenSkem:
-			// F43: Skem ciphertext is encrypted
+			// Skem ciphertext is encrypted (EncryptAndHash adds tag)
 			overhead += hs.skem.CiphertextLen()
 			if hasKey {
 				overhead += TagLen
@@ -578,11 +552,10 @@ func (hs *HybridHandshake) processReadToken(token Token, reader *messageReader) 
 	}
 }
 
-// writeTokenE generates BOTH DH AND KEM ephemeral keypairs, writes both pubkeys, mixes.
-// F141: Generates DH ephemeral + KEM ephemeral.
-// F12: Ephemerals generated HERE, inside WriteMessage.
-// F57/F90: Sets ownRandApplied.
-// Rust hybrid.rs lines 460-493: DH pubkey first, then KEM pubkey.
+// writeTokenE generates BOTH DH AND KEM ephemeral keypairs, writes both public
+// keys to the output buffer, and mixes them into the handshake state.
+// DH pubkey is written first, then KEM pubkey (matching Rust hybrid.rs order).
+// Sets ownRandApplied after all crypto operations complete.
 func (hs *HybridHandshake) writeTokenE(out []byte) (int, error) {
 	// Generate DH ephemeral if not present
 	if hs.e == nil {
@@ -624,15 +597,14 @@ func (hs *HybridHandshake) writeTokenE(out []byte) (int, error) {
 	n = copy(out[cur:], hs.kemE.Public)
 	cur += n
 
-	// F57/F90: Set AFTER all crypto ops + writes (matches Rust order)
+	// Set AFTER all crypto ops + writes (matches Rust order)
 	hs.ownRandApplied = true
 
 	return cur, nil
 }
 
 // readTokenE reads BOTH DH AND KEM remote ephemeral public keys.
-// F141: Reads DH pubkey then KEM pubkey.
-// Rust hybrid.rs lines 635-651.
+// Reads DH pubkey then KEM pubkey (matching Rust hybrid.rs order).
 func (hs *HybridHandshake) readTokenE(reader *messageReader) error {
 	// Read DH ephemeral public key
 	dhPubLen := hs.dh.PubKeyLen()
@@ -672,27 +644,21 @@ func (hs *HybridHandshake) readTokenE(reader *messageReader) error {
 }
 
 // writeTokenS encrypts and writes BOTH DH AND KEM static public keys.
-// F41: Sequential nonces from same cipherstate for DH then KEM.
-// F142: has_key checked ONCE, reused for BOTH encrypt_and_hash calls.
-// F86/F138: PSK validity check on write-side only.
-// Rust hybrid.rs lines 494-526.
+// Both EncryptAndHash calls use the same CipherState with sequential nonces:
+// DH pubkey gets nonce n, KEM pubkey gets nonce n+1. HasKey state cannot change
+// between the two calls (only MixKey/MixKeyAndHash modify it, neither called here).
+// Validates PSK own-randomness requirement on write-side.
 func (hs *HybridHandshake) writeTokenS(out []byte) (int, error) {
 	if hs.s == nil || hs.kemS == nil {
 		return 0, fmt.Errorf("%w: static keys required for Token::S", ErrMissingKey)
 	}
 
-	// F86/F138: PSK validity check
+	// PSK validity check
 	if hs.pskApplied && !hs.ownRandApplied {
 		return 0, fmt.Errorf("%w: PSK requires own randomness before Token::S", ErrPSKInvalid)
 	}
 
 	cur := 0
-
-	// F41/F142: Both EncryptAndHash calls use the same CipherState with sequential
-	// nonces. DH pubkey gets nonce n, KEM pubkey gets n+1. The has_key state is
-	// checked internally by EncryptAndHash (copies plaintext when no key, encrypts
-	// when key exists). This is correct because has_key cannot change between the
-	// two calls - only MixKey/MixKeyAndHash modify has_key, and neither is called here.
 
 	// Encrypt and send DH static public key
 	dhCt, err := hs.symmetricState.EncryptAndHash(hs.s.Public)
@@ -714,10 +680,8 @@ func (hs *HybridHandshake) writeTokenS(out []byte) (int, error) {
 }
 
 // readTokenS reads and decrypts BOTH DH AND KEM remote static public keys.
-// F142: has_key checked ONCE, reused for both decrypt_and_hash calls.
-// Rust hybrid.rs lines 652-677.
+// HasKey is checked once and reused for both DecryptAndHash calls.
 func (hs *HybridHandshake) readTokenS(reader *messageReader) error {
-	// F142: Check has_key ONCE for both reads
 	hasKey := hs.symmetricState.HasKey()
 
 	// Read DH static public key
@@ -755,9 +719,8 @@ func (hs *HybridHandshake) readTokenS(reader *messageReader) error {
 	return nil
 }
 
-// doDH performs DH between local keypair and remote public key, then MixKey.
-// F78: DH can fail - propagate error.
-// F84: Low-order points caught by X25519 impl.
+// doDH performs DH between a local keypair and a remote public key, then MixKey.
+// DH can fail (e.g., low-order points caught by X25519).
 func (hs *HybridHandshake) doDH(local, remote *KeyPair) error {
 	if local == nil || remote == nil {
 		return fmt.Errorf("%w: DH requires both keypairs", ErrMissingKey)
@@ -772,12 +735,10 @@ func (hs *HybridHandshake) doDH(local, remote *KeyPair) error {
 	return hs.symmetricState.MixKey(ss)
 }
 
-// writeTokenEkem encapsulates to remote ephemeral KEM key.
-// F42: Ekem uses MixKey (2-output HKDF), NOT MixKeyAndHash.
-// F43/F143: Ekem ciphertext is plaintext - MixHash, not EncryptAndHash.
-// F90: Sets ownRandApplied.
-// F158: Identical to PQ Ekem write.
-// Rust hybrid.rs lines 542-558.
+// writeTokenEkem encapsulates to the remote ephemeral KEM key.
+// Ekem uses MixKey (2-output HKDF), NOT MixKeyAndHash.
+// Ekem ciphertext is sent in plaintext (MixHash only, not EncryptAndHash).
+// Sets ownRandApplied. Identical to PQ Ekem write.
 func (hs *HybridHandshake) writeTokenEkem(out []byte) (int, error) {
 	if hs.kemRE == nil {
 		return 0, fmt.Errorf("%w: Ekem requires remote ephemeral KEM key", ErrMissingKey)
@@ -789,26 +750,24 @@ func (hs *HybridHandshake) writeTokenEkem(out []byte) (int, error) {
 	}
 	defer zeroSlice(ss)
 
-	// F43: Ekem ciphertext is plaintext - MixHash only
+	// Ekem ciphertext is plaintext: MixHash only
 	hs.symmetricState.MixHash(ct)
 
-	// F42: Ekem uses MixKey (2-output HKDF)
+	// Ekem uses MixKey (2-output HKDF)
 	if err := hs.symmetricState.MixKey(ss); err != nil {
 		return 0, err
 	}
 
 	n := copy(out, ct)
 
-	// F90: Set AFTER crypto ops complete
+	// Set AFTER crypto ops complete
 	hs.ownRandApplied = true
 
 	return n, nil
 }
 
 // readTokenEkem decapsulates from local ephemeral KEM key.
-// F42: Ekem uses MixKey.
-// F43: Ekem ciphertext is plaintext - MixHash.
-// Rust hybrid.rs lines 694-698.
+// Ekem uses MixKey. Ekem ciphertext is plaintext (MixHash).
 func (hs *HybridHandshake) readTokenEkem(reader *messageReader) error {
 	ctLen := hs.ekem.CiphertextLen()
 	ct, err := reader.read(ctLen)
@@ -816,7 +775,7 @@ func (hs *HybridHandshake) readTokenEkem(reader *messageReader) error {
 		return err
 	}
 
-	// F43: MixHash the plaintext ciphertext FIRST
+	// MixHash the plaintext ciphertext FIRST (matches Rust order)
 	hs.symmetricState.MixHash(ct)
 
 	if hs.kemE == nil {
@@ -829,22 +788,20 @@ func (hs *HybridHandshake) readTokenEkem(reader *messageReader) error {
 	}
 	defer zeroSlice(ss)
 
-	// F42: MixKey with shared secret
+	// MixKey with shared secret
 	return hs.symmetricState.MixKey(ss)
 }
 
-// writeTokenSkem encapsulates to remote static KEM key.
-// F42: Skem uses MixKeyAndHash (3-output HKDF), NOT MixKey.
-// F43/F143: Skem ciphertext IS encrypted - EncryptAndHash, not MixHash.
-// F86/F159: PSK validity check.
-// F90: Sets ownRandApplied.
-// Rust hybrid.rs lines 559-587.
+// writeTokenSkem encapsulates to the remote static KEM key.
+// Skem uses MixKeyAndHash (3-output HKDF), NOT MixKey.
+// Skem ciphertext IS encrypted (EncryptAndHash, not MixHash).
+// Sets ownRandApplied. Validates PSK own-randomness requirement.
 func (hs *HybridHandshake) writeTokenSkem(out []byte) (int, error) {
 	if hs.kemRS == nil {
 		return 0, fmt.Errorf("%w: Skem requires remote static KEM key", ErrMissingKey)
 	}
 
-	// F86/F159: PSK validity check
+	// PSK validity check
 	if hs.pskApplied && !hs.ownRandApplied {
 		return 0, fmt.Errorf("%w: PSK requires own randomness before Skem", ErrPSKInvalid)
 	}
@@ -855,46 +812,45 @@ func (hs *HybridHandshake) writeTokenSkem(out []byte) (int, error) {
 	}
 	defer zeroSlice(ss)
 
-	// F43: Skem ciphertext is encrypted via EncryptAndHash
+	// Skem ciphertext is encrypted via EncryptAndHash
 	encCt, err := hs.symmetricState.EncryptAndHash(ct)
-	// F85: Zero plaintext KEM ciphertext after encryption - it's the raw
+	// Zero plaintext KEM ciphertext after encryption - it's the raw
 	// KEM output that would enable decapsulation if leaked from memory.
 	zeroSlice(ct)
 	if err != nil {
 		return 0, err
 	}
 
-	// F42: Skem uses MixKeyAndHash (3-output HKDF)
+	// Skem uses MixKeyAndHash (3-output HKDF)
 	if err := hs.symmetricState.MixKeyAndHash(ss); err != nil {
 		return 0, err
 	}
 
 	n := copy(out, encCt)
 
-	// F90: Set AFTER all crypto ops complete
+	// Set AFTER all crypto ops complete
 	hs.ownRandApplied = true
 
 	return n, nil
 }
 
 // readTokenSkem decapsulates from local static KEM key.
-// F42: Skem uses MixKeyAndHash.
-// F43: Skem ciphertext IS encrypted - DecryptAndHash.
-// F69: CRITICAL - decapsulate with DECRYPTED CT, not wire CT.
-// Rust hybrid.rs lines 700-718.
+// Skem uses MixKeyAndHash. Skem ciphertext IS encrypted (DecryptAndHash).
+// CRITICAL: decapsulate with the DECRYPTED ciphertext, not the wire ciphertext.
 func (hs *HybridHandshake) readTokenSkem(reader *messageReader) error {
 	readLen := hs.skem.CiphertextLen()
 	if hs.symmetricState.HasKey() {
 		readLen += TagLen
 	}
 
-	// F69: ctEnc = wire ciphertext (possibly encrypted)
+	// Read wire ciphertext (possibly encrypted)
 	ctEnc, err := reader.read(readLen)
 	if err != nil {
 		return err
 	}
 
-	// F43/F69: DecryptAndHash to get the plaintext KEM ciphertext
+	// DecryptAndHash to get the plaintext KEM ciphertext.
+	// Decapsulate with the decrypted ciphertext, NOT the wire ciphertext.
 	ctPlain, err := hs.symmetricState.DecryptAndHash(ctEnc)
 	if err != nil {
 		return err
@@ -904,21 +860,21 @@ func (hs *HybridHandshake) readTokenSkem(reader *messageReader) error {
 		return fmt.Errorf("%w: Skem read requires local static KEM key", ErrMissingKey)
 	}
 
-	// F69: Decapsulate with DECRYPTED CT (ctPlain), not wire CT (ctEnc)
+	// Decapsulate with DECRYPTED ciphertext
 	ss, err := hs.skem.Decapsulate(ctPlain, hs.kemS.SecretSlice())
 	if err != nil {
 		return fmt.Errorf("%w: Skem decapsulate: %v", ErrKEM, err)
 	}
 	defer zeroSlice(ss)
 
-	// F42: MixKeyAndHash with shared secret
+	// MixKeyAndHash with shared secret
 	return hs.symmetricState.MixKeyAndHash(ss)
 }
 
-// processTokenPsk mixes a pre-shared key.
-// F86: Sets pskApplied. Does NOT set ownRandApplied.
-// PSK is a pre-shared secret, not locally-generated randomness.
-// Only E, Ekem, and Skem satisfy the own-randomness requirement (F90).
+// processTokenPsk mixes a pre-shared key via MixKeyAndHash.
+// Sets pskApplied for validity checks. Does NOT set ownRandApplied because
+// a PSK is a pre-shared secret, not locally-generated randomness.
+// Only E, Ekem, and Skem satisfy the own-randomness requirement.
 func (hs *HybridHandshake) processTokenPsk() error {
 	psk, err := hs.psks.Pop()
 	if err != nil {
@@ -930,16 +886,15 @@ func (hs *HybridHandshake) processTokenPsk() error {
 		}
 	}()
 
-	hs.pskApplied = true // F86: runtime PSK tracking (NOT ownRandApplied)
+	hs.pskApplied = true
 	return hs.symmetricState.MixKeyAndHash(psk[:])
 }
 
 // hybridBuildName constructs the Noise protocol name for Hybrid handshakes.
-// F154: One of 5 format variants (this is the Hybrid variant).
+// Has two formats depending on whether EKEM and SKEM are the same:
 //
-// Rust hybrid.rs lines 826-856:
-// When EKEM == SKEM (same name): "Noise_{pattern}_{DH}+{EKEM}_{Cipher}_{Hash}"
-// When EKEM != SKEM (diff name): "Noise_{pattern}_{DH}+{EKEM}+{SKEM}_{Cipher}_{Hash}"
+// Same KEM:      "Noise_{pattern}_{DH}+{EKEM}_{Cipher}_{Hash}"
+// Different KEM: "Noise_{pattern}_{DH}+{EKEM}+{SKEM}_{Cipher}_{Hash}"
 func hybridBuildName(pattern *HandshakePattern, suite CipherSuite) string {
 	ekemName := suite.EKEM.Name()
 	skemName := suite.SKEM.Name()

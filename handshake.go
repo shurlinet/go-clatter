@@ -5,31 +5,31 @@ import (
 	"sync/atomic"
 )
 
-// HandshakeStatus represents the current state of the handshake.
-// F9: Message ordering is driven by status + pattern indices.
+// HandshakeStatus represents the current state of a Noise handshake.
+// Message ordering is driven by status combined with pattern indices.
 type HandshakeStatus uint8
 
 const (
 	StatusSend    HandshakeStatus = iota // Our turn to write
 	StatusReceive                        // Their turn to write (we read)
 	StatusReady                          // Handshake complete, ready for Finalize
-	StatusError                          // Unrecoverable error (F62)
+	StatusError                          // Unrecoverable error; all state zeroed
 )
 
 // Handshaker is the interface implemented by all handshake types (NQ, PQ, Hybrid).
-// F9: WriteMessage/ReadMessage advance the state machine.
-// F36: Implementations MUST check inUse atomic for goroutine safety.
-// F162/F164: All implementations must zero state on error via setError.
+// WriteMessage/ReadMessage advance the pattern state machine one message at a time.
+// Implementations enforce single-goroutine use via an atomic guard, and zero
+// all cryptographic state immediately on any error.
 type Handshaker interface {
 	// WriteMessage writes the next handshake message.
 	// payload is optional application data to encrypt with this message.
 	// Returns the number of bytes written to out.
-	// F171: Validates buffer size before processing.
+	// The output buffer must be large enough for the message overhead plus payload.
 	WriteMessage(payload, out []byte) (int, error)
 
 	// ReadMessage reads and processes an incoming handshake message.
 	// Returns decrypted payload bytes.
-	// F172: Validates message length >= overhead before processing.
+	// Validates that message length covers at least the expected overhead.
 	ReadMessage(message, out []byte) (int, error)
 
 	// IsFinished returns true when the handshake is complete (status == Ready).
@@ -38,12 +38,12 @@ type Handshaker interface {
 	// IsWriteTurn returns true when it's our turn to send a message.
 	IsWriteTurn() bool
 
-	// Finalize extracts transport keys. Zeros handshake state.
-	// F117: Sets finalized=true, prevents double-finalize.
+	// Finalize extracts transport keys and zeros handshake state.
+	// Can only be called once; subsequent calls return ErrAlreadyFinished.
 	Finalize() (*TransportState, error)
 
 	// GetNextMessageOverhead returns the byte overhead for the next message.
-	// F80: Can error (pattern index out of bounds).
+	// Returns error if the pattern index is out of bounds.
 	GetNextMessageOverhead() (int, error)
 
 	// PushPSK queues a pre-shared key for the handshake.
@@ -52,15 +52,14 @@ type Handshaker interface {
 	// GetHandshakeHash returns the current handshake hash (h).
 	GetHandshakeHash() []byte
 
-	// Destroy zeros ALL fields in the handshake state.
-	// F128: Must zero symmetricState, s, e, rs, re, psks, rng, pattern.
+	// Destroy zeros ALL fields in the handshake state, including the
+	// symmetric state, all keypairs, PSK queue, and KEM state.
 	Destroy()
 }
 
 // HandshakeInternals holds shared state for all handshake implementations.
-// F128: Destroy() zeros ALL fields.
-// F129: getNextMessage() uses 4-way dispatch on (initiator, status).
-// F160: messageReader is used for parsing incoming messages.
+// Destroy() zeros ALL fields. getNextMessage() uses 4-way dispatch on
+// (initiator, status) to select the correct pattern message list.
 //
 // This struct is embedded by NqHandshake, PqHandshake, HybridHandshake.
 type HandshakeInternals struct {
@@ -79,16 +78,17 @@ type HandshakeInternals struct {
 	initIdx     int // initiator message index
 	respIdx     int // responder message index
 	finalized      bool
-	ownRandApplied bool // F57: tracks local entropy contribution
-	pskApplied     bool // F86: tracks whether PSK token processed in this handshake
+	ownRandApplied bool // tracks whether local entropy has been contributed
+	pskApplied     bool // tracks whether a PSK token has been processed
 
 	// PSK queue
 	psks PSKQueue
 
-	// RNG (F70: injectable for testing)
+	// RNG source (injectable for deterministic testing; defaults to crypto/rand.Reader)
 	rng RNG
 
-	// F36: Atomic guard against concurrent use
+	// Atomic guard against concurrent use. Only one goroutine may
+	// call WriteMessage/ReadMessage/Finalize at a time.
 	inUse atomic.Uint32
 
 	// Cipher and Hash for creating new primitives
@@ -101,7 +101,7 @@ type HandshakeInternals struct {
 }
 
 // acquireUse attempts to acquire exclusive access for a handshake operation.
-// F36: Returns error if another goroutine is already using this handshake.
+// Returns ErrConcurrentUse if another goroutine is already active.
 func (h *HandshakeInternals) acquireUse() error {
 	if !h.inUse.CompareAndSwap(0, 1) {
 		return ErrConcurrentUse
@@ -115,8 +115,7 @@ func (h *HandshakeInternals) releaseUse() {
 }
 
 // checkState validates the handshake is in a usable state.
-// F62: Returns sticky error if in error state.
-// F117: Returns error if already finalized.
+// Returns sticky error if in error state, or ErrAlreadyFinished if finalized.
 func (h *HandshakeInternals) checkState() error {
 	if h.status == StatusError {
 		return ErrErrorState
@@ -127,9 +126,8 @@ func (h *HandshakeInternals) checkState() error {
 	return nil
 }
 
-// setError records an error and zeros all cryptographic state.
-// F63/F164: On ANY error, state is wiped immediately. No recovery.
-// After this call, status is Error and all secrets are zeroed.
+// setError records an error and zeros all cryptographic state immediately.
+// After this call, status is Error and all secrets are zeroed. No recovery.
 func (h *HandshakeInternals) setError(err error) {
 	h.status = StatusError
 	if h.symmetricState != nil {
@@ -160,9 +158,9 @@ func (h *HandshakeInternals) destroyKeys() {
 	h.psks.Destroy()
 }
 
-// Destroy zeros ALL fields in the handshake internals.
-// F128: Must zero symmetricState, s, e, rs, re, psks, rng, ekem, skem, pattern indices.
-// All pointers nil'd after zeroing to prevent stale access.
+// Destroy zeros ALL fields in the handshake internals, including the
+// symmetric state, keypairs, PSK queue, KEM references, and pattern indices.
+// All pointers are nil'd after zeroing to prevent stale access.
 func (h *HandshakeInternals) Destroy() {
 	if h.symmetricState != nil {
 		h.symmetricState.Destroy()
@@ -205,9 +203,10 @@ func (h *HandshakeInternals) PushPSK(psk []byte) error {
 // getNextMessage returns the token list for the next message to process.
 // The returned slice references the pattern's internal array - DO NOT MODIFY.
 // PRECONDITION: caller must call checkState() and acquireUse() before this.
-// F129: 4-way dispatch on (initiator, status).
-// F66: Pattern index is incremented BEFORE token processing.
-// F150: After fetch, index already advanced. Errors are non-recoverable.
+//
+// Uses 4-way dispatch on (initiator, status) to select the correct message list.
+// The pattern index is incremented BEFORE token processing so that on error
+// the handshake cannot retry the same message (errors are non-recoverable).
 func (h *HandshakeInternals) getNextMessage() ([]Token, error) {
 	switch {
 	case h.initiator && h.status == StatusSend:
@@ -216,16 +215,16 @@ func (h *HandshakeInternals) getNextMessage() ([]Token, error) {
 			return nil, fmt.Errorf("%w: initiator write index overflow", ErrInvalidState)
 		}
 		msg := &h.pattern.initiatorMsgs[h.initIdx]
-		h.initIdx++ // F66: increment BEFORE processing
+		h.initIdx++ // increment BEFORE processing
 		return msg.tokens[:msg.count], nil
 
 	case h.initiator && h.status == StatusReceive:
-		// Initiator reading: use responder pattern at respIdx (F88)
+		// Initiator reading: use responder pattern at respIdx
 		if h.respIdx >= h.pattern.numResponder {
 			return nil, fmt.Errorf("%w: responder read index overflow", ErrInvalidState)
 		}
 		msg := &h.pattern.responderMsgs[h.respIdx]
-		h.respIdx++ // F66
+		h.respIdx++
 		return msg.tokens[:msg.count], nil
 
 	case !h.initiator && h.status == StatusSend:
@@ -234,16 +233,16 @@ func (h *HandshakeInternals) getNextMessage() ([]Token, error) {
 			return nil, fmt.Errorf("%w: responder write index overflow", ErrInvalidState)
 		}
 		msg := &h.pattern.responderMsgs[h.respIdx]
-		h.respIdx++ // F66
+		h.respIdx++
 		return msg.tokens[:msg.count], nil
 
 	case !h.initiator && h.status == StatusReceive:
-		// Responder reading: use initiator pattern at initIdx (F88)
+		// Responder reading: use initiator pattern at initIdx
 		if h.initIdx >= h.pattern.numInitiator {
 			return nil, fmt.Errorf("%w: initiator read index overflow", ErrInvalidState)
 		}
 		msg := &h.pattern.initiatorMsgs[h.initIdx]
-		h.initIdx++ // F66
+		h.initIdx++
 		return msg.tokens[:msg.count], nil
 
 	default:
@@ -252,7 +251,7 @@ func (h *HandshakeInternals) getNextMessage() ([]Token, error) {
 }
 
 // updateStatus checks if the handshake is complete after processing a message.
-// F87: Ready requires BOTH indices matching pattern lengths.
+// Ready requires BOTH initiator and responder indices matching pattern lengths.
 func (h *HandshakeInternals) updateStatus() {
 	if h.initIdx >= h.pattern.numInitiator && h.respIdx >= h.pattern.numResponder {
 		h.status = StatusReady
@@ -277,9 +276,9 @@ func (h *HandshakeInternals) determineInitialStatus() {
 	}
 }
 
-// messageReader is a stateful message parser for incoming handshake messages.
-// F160: Identical concept across all 3 modules (NQ, PQ, Hybrid).
-// Replaces Rust's `get` closure that advances through the input buffer.
+// messageReader is a stateful parser for incoming handshake messages.
+// It advances through the input buffer, extracting fixed-size fields.
+// Used identically across NQ, PQ, and Hybrid handshake read paths.
 type messageReader struct {
 	data   []byte
 	offset int
@@ -312,8 +311,9 @@ func (r *messageReader) rest() []byte {
 	return r.data[r.offset:]
 }
 
-// CipherSuite bundles all crypto choices for a handshake.
-// Created once, passed to constructors. No Go generics needed (F3/F81).
+// CipherSuite bundles all cryptographic primitive choices for a handshake.
+// Created once, passed to handshake constructors. Avoids Go generics by
+// using runtime interface dispatch.
 type CipherSuite struct {
 	DH     DH       // X25519
 	Cipher Cipher   // ChaCha20Poly1305 or AES-256-GCM
@@ -374,7 +374,7 @@ func WithPrologue(data []byte) Option {
 }
 
 // WithRNG sets the random number generator (default: crypto/rand.Reader).
-// F70: Injectable for deterministic testing.
+// Injectable for deterministic testing with DummyRng.
 func WithRNG(rng RNG) Option {
 	return func(o *handshakeOptions) {
 		o.rng = rng

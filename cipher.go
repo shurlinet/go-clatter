@@ -5,17 +5,17 @@ import (
 	"math"
 )
 
-// CipherState holds a symmetric cipher key and monotonic nonce.
-// Matches Rust Clatter's cipherstate.rs.
+// CipherState holds a symmetric cipher key and a monotonically incrementing nonce.
 //
-// F27: SetNonce is NOT exported - nonce rollback = catastrophic key reuse.
-// F34: No Take() exposed - internal copy zeros source.
-// F54: Rekey calls raw AEAD with MaxUint64 nonce, bypassing overflow check.
-// F109: split() creates CipherStates with nonce=0.
-// F165: CipherState is nil/absent before first mixKey in SymmetricState.
-// F168: Constructor returns error on wrong key length (Clatter panics).
-// F170: Nonce overflow is post-check: MaxUint64 encrypts, THEN overflowed=true.
-//       Next call returns ErrNonceOverflow. One encrypt at MaxUint64, then blocked.
+// After construction, each call to EncryptWithAd or DecryptWithAd uses the current
+// nonce value and advances it by one. The nonce is never reset; when it reaches
+// MaxUint64, that final operation succeeds and all subsequent calls return
+// ErrNonceOverflow. This matches the Noise protocol specification.
+//
+// CipherState is not safe for concurrent use. Callers must synchronize access
+// externally or use the handshake-level atomic guards.
+//
+// Call Destroy to zero all key material when done.
 type CipherState struct {
 	key        [KeyLen]byte
 	nonce      uint64
@@ -25,9 +25,12 @@ type CipherState struct {
 	cipher     Cipher // the raw AEAD implementation
 }
 
-// NewCipherState creates a CipherState with the given key and nonce=0.
-// F109: Both CipherStates from split() start at nonce 0.
-// F168: Returns error on wrong key length.
+// NewCipherState creates a CipherState with the given key and nonce starting at 0.
+// The key must be exactly KeyLen (32) bytes; returns ErrInvalidKeyLength otherwise.
+//
+// The caller is responsible for zeroing the source key slice after this call.
+// NewCipherState copies the key but does not zero the source, because Split
+// passes the same slice to two consecutive NewCipherState calls.
 func NewCipherState(c Cipher, key []byte) (*CipherState, error) {
 	if len(key) != KeyLen {
 		return nil, fmt.Errorf("%w: got %d bytes, want %d", ErrInvalidKeyLength, len(key), KeyLen)
@@ -38,15 +41,12 @@ func NewCipherState(c Cipher, key []byte) (*CipherState, error) {
 		cipher: c,
 	}
 	copy(cs.key[:], key)
-	// Caller is responsible for zeroing key after this call.
-	// NewCipherState does NOT zero the source: Split() passes the same
-	// slice to two NewCipherState calls, and defensive zeroing here would
-	// give the second CipherState a zero key.
 	return cs, nil
 }
 
-// HasKey returns true if a key has been set (false before first mixKey).
-// F165: SymmetricState checks this to decide encrypt vs plaintext copy.
+// HasKey returns true if a key has been set.
+// Returns false for nil CipherState, which represents the "empty" state before
+// the first MixKey call in SymmetricState.
 func (cs *CipherState) HasKey() bool {
 	if cs == nil {
 		return false
@@ -54,9 +54,11 @@ func (cs *CipherState) HasKey() bool {
 	return cs.hasKey
 }
 
-// EncryptWithAd encrypts plaintext with associated data.
-// Nonce increments after each call.
-// F170: Post-check overflow - MaxUint64 encrypts successfully, then blocks.
+// EncryptWithAd encrypts plaintext with the given associated data using the
+// current nonce, then advances the nonce. Returns the ciphertext (plaintext + tag).
+//
+// Returns ErrNonceOverflow if the nonce was exhausted by a previous call.
+// Returns ErrDestroyed if Destroy has been called.
 func (cs *CipherState) EncryptWithAd(ad, plaintext []byte) ([]byte, error) {
 	if cs == nil {
 		return nil, ErrCipher
@@ -78,7 +80,8 @@ func (cs *CipherState) EncryptWithAd(ad, plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// F170: Post-check. nonce was used successfully, now try to advance.
+	// Nonce overflow is a post-check: the operation at MaxUint64 succeeds,
+	// then all future operations are blocked.
 	if cs.nonce == math.MaxUint64 {
 		cs.overflowed = true
 	} else {
@@ -88,8 +91,11 @@ func (cs *CipherState) EncryptWithAd(ad, plaintext []byte) ([]byte, error) {
 	return result, nil
 }
 
-// DecryptWithAd decrypts ciphertext with associated data.
-// F170: Same post-check overflow logic as encrypt.
+// DecryptWithAd decrypts ciphertext with the given associated data using the
+// current nonce, then advances the nonce. Returns the plaintext.
+//
+// Returns ErrDecrypt if authentication fails.
+// Returns ErrNonceOverflow if the nonce was exhausted by a previous call.
 func (cs *CipherState) DecryptWithAd(ad, ciphertext []byte) ([]byte, error) {
 	if cs == nil {
 		return nil, ErrCipher
@@ -124,9 +130,11 @@ func (cs *CipherState) DecryptWithAd(ad, ciphertext []byte) ([]byte, error) {
 	return result, nil
 }
 
-// Rekey replaces the key using AEAD encrypt with MaxUint64 nonce.
-// F54: Calls raw AEAD Seal directly, NOT through EncryptWithAd
-// (would hit overflow guard). Noise spec: rekey does NOT reset nonce (F135).
+// Rekey replaces the current key by encrypting a block of zeros with the
+// MaxUint64 nonce. This calls the raw AEAD directly (not through EncryptWithAd)
+// to avoid triggering the nonce overflow guard.
+//
+// Per the Noise specification, Rekey does NOT reset the nonce counter.
 func (cs *CipherState) Rekey() error {
 	if cs == nil {
 		return ErrCipher
@@ -138,8 +146,6 @@ func (cs *CipherState) Rekey() error {
 		return ErrCipher
 	}
 
-	// AEAD encrypt with nonce=MaxUint64, empty AD, zeros plaintext.
-	// F110: All intermediates zeroed after use.
 	var zeros [KeyLen]byte
 	out := make([]byte, KeyLen+TagLen)
 	result, err := cs.cipher.Encrypt(cs.key, math.MaxUint64, nil, zeros[:], out)
@@ -148,15 +154,15 @@ func (cs *CipherState) Rekey() error {
 		return fmt.Errorf("%w: rekey failed: %v", ErrCipher, err)
 	}
 
-	// Truncate to KeyLen (discard tag), then zero the full result buffer
+	// Take the first KeyLen bytes as the new key, discard the tag.
 	copy(cs.key[:], result[:KeyLen])
 	zeroSlice(out)
 	return nil
 }
 
-// EncryptWithAdInPlace encrypts msgLen bytes in inOut in-place.
-// Returns total ciphertext length (msgLen + TagLen).
-// F104: In-place Seal verified for Go's AES-GCM and ChaCha20Poly1305.
+// EncryptWithAdInPlace encrypts msgLen bytes from inOut in-place, appending the
+// authentication tag. The buffer must have room for msgLen + TagLen bytes.
+// Returns the total ciphertext length.
 func (cs *CipherState) EncryptWithAdInPlace(ad []byte, inOut []byte, msgLen int) (int, error) {
 	if cs == nil {
 		return 0, ErrCipher
@@ -177,7 +183,7 @@ func (cs *CipherState) EncryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 			ErrBufferTooSmall, outLen, len(inOut))
 	}
 
-	// Copy plaintext to temp buffer to avoid aliasing issues during encrypt.
+	// Copy plaintext to a temporary buffer to avoid aliasing issues during encrypt.
 	plaintext := make([]byte, msgLen)
 	copy(plaintext, inOut[:msgLen])
 	_, err := cs.cipher.Encrypt(cs.key, cs.nonce, ad, plaintext, inOut[:outLen])
@@ -195,8 +201,8 @@ func (cs *CipherState) EncryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 	return outLen, nil
 }
 
-// DecryptWithAdInPlace decrypts msgLen bytes in inOut in-place.
-// Returns plaintext length (msgLen - TagLen).
+// DecryptWithAdInPlace decrypts msgLen bytes from inOut in-place.
+// Returns the plaintext length (msgLen - TagLen).
 func (cs *CipherState) DecryptWithAdInPlace(ad []byte, inOut []byte, msgLen int) (int, error) {
 	if cs == nil {
 		return 0, ErrCipher
@@ -236,21 +242,20 @@ func (cs *CipherState) DecryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 	return ptLen, nil
 }
 
-// setNonce sets the nonce value. Internal only, NOT exported (F27).
-// Used for SetReceivingNonce in TransportState (F133).
+// setNonce sets the nonce value. Internal use only (unexported).
+// Used by TransportState.SetReceivingNonce for receive-side nonce synchronization.
 func (cs *CipherState) setNonce(n uint64) {
 	cs.nonce = n
 	cs.overflowed = false
 }
 
-// Nonce returns the current nonce value. Read-only access for testing/transport.
+// Nonce returns the current nonce value.
 func (cs *CipherState) Nonce() uint64 {
 	return cs.nonce
 }
 
-// Destroy zeros ALL fields and marks the CipherState as destroyed.
-// F29: Called by SymmetricState.mixKey before replacing the old CipherState.
-// Zeros key, nonce (usage count is metadata), and nils cipher reference.
+// Destroy zeros the key, resets all state, and marks this CipherState as destroyed.
+// All subsequent operations return ErrDestroyed.
 func (cs *CipherState) Destroy() {
 	if cs == nil {
 		return
@@ -265,7 +270,8 @@ func (cs *CipherState) Destroy() {
 	cs.destroyed = true
 }
 
-// IsDestroyed returns true if the CipherState has been zeroed.
+// IsDestroyed returns true if Destroy has been called.
+// Returns true for nil CipherState.
 func (cs *CipherState) IsDestroyed() bool {
 	if cs == nil {
 		return true

@@ -75,7 +75,7 @@ func mustHKDF3(t *testing.T, h HashFunc, ck, ikm []byte) ([]byte, []byte, []byte
 	return o1, o2, o3
 }
 
-// F107: Counter bytes 0x01 vs ASCII "1" produce different HKDF output.
+// Counter bytes 0x01 vs ASCII "1" produce different HKDF output.
 func TestHKDF2_CounterBytesNotASCII(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0xaa}, 32)
@@ -119,7 +119,7 @@ func TestHKDF2_MatchesNoiseSpec(t *testing.T) {
 	}
 }
 
-// F108: split() calls HKDF with empty IKM.
+// Split calls HKDF with empty IKM.
 func TestHKDF2_EmptyIKM(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x42}, 32)
@@ -141,7 +141,7 @@ func TestHKDF2_EmptyIKM(t *testing.T) {
 	}
 }
 
-// F108: Nil IKM should work the same as empty.
+// Nil IKM should work the same as empty.
 func TestHKDF2_NilIKM(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x42}, 32)
@@ -179,7 +179,7 @@ func TestHKDF3_ThreeOutputs(t *testing.T) {
 	}
 }
 
-// F118: Verify ck is not corrupted when it could alias output.
+// Verify ck is not corrupted when it could alias output.
 func TestHKDF2_CKNotCorrupted(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0xdd}, 32)
@@ -210,7 +210,7 @@ func TestHKDF2_SHA512_OutputLength(t *testing.T) {
 	}
 }
 
-// F110: Deterministic - no state leakage from zeroing.
+// Deterministic - no state leakage from zeroing.
 func TestHKDF2_Deterministic(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x11}, 32)
@@ -224,7 +224,7 @@ func TestHKDF2_Deterministic(t *testing.T) {
 	}
 }
 
-// F56: HMAC key exceeding block length returns error.
+// HMAC key exceeding block length returns error.
 func TestHmacHash_KeyTooLong(t *testing.T) {
 	h := &testSha256{} // blockLen=64
 	longKey := bytes.Repeat([]byte{0xff}, 65) // 1 byte over
@@ -235,7 +235,7 @@ func TestHmacHash_KeyTooLong(t *testing.T) {
 	}
 }
 
-// F56: HMAC key at exactly block length succeeds.
+// HMAC key at exactly block length succeeds.
 func TestHmacHash_KeyExactBlockLen(t *testing.T) {
 	h := &testSha256{}
 	key := bytes.Repeat([]byte{0xaa}, 64) // exactly blockLen
@@ -249,7 +249,7 @@ func TestHmacHash_KeyExactBlockLen(t *testing.T) {
 	}
 }
 
-// F56: HKDF2 propagates HMAC key length error.
+// HKDF2 propagates HMAC key length error.
 func TestHKDF2_KeyTooLong(t *testing.T) {
 	h := &testSha256{}
 	longCk := bytes.Repeat([]byte{0xff}, 65) // exceeds blockLen=64

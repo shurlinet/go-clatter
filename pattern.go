@@ -3,7 +3,7 @@ package clatter
 import "fmt"
 
 // Token represents a single operation in a Noise handshake pattern message.
-// F10: Matches Rust Clatter's Token enum exactly.
+// Matches Rust Clatter's Token enum exactly.
 type Token uint8
 
 const (
@@ -45,7 +45,7 @@ func tokenString(t Token) string {
 }
 
 // PatternType indicates the cryptographic category of a handshake pattern.
-// F113: Auto-detected from tokens at construction time.
+// Auto-detected from tokens at construction time.
 type PatternType uint8
 
 const (
@@ -55,8 +55,8 @@ const (
 )
 
 // HandshakePattern defines the structure of a Noise handshake.
-// F77: Value type with fixed arrays (not slices).
-// F116: hasPSK cached at construction from token scan.
+// Value type with fixed arrays (not slices) to avoid heap allocation.
+// hasPSK is cached at construction from a token scan.
 type HandshakePattern struct {
 	name string // e.g., "NN", "XX", "IK", "pqXX", "hybridXX"
 
@@ -73,8 +73,9 @@ type HandshakePattern struct {
 	numPreInit   int
 	numPreResp   int
 
-	patternType PatternType // F113: auto-detected
-	hasPSK      bool        // F116: cached from token scan
+	patternType PatternType // auto-detected from tokens
+	hasPSK      bool        // cached from token scan
+
 	isOneWay    bool        // One-way patterns: N, K, X (initiator only sends)
 }
 
@@ -163,10 +164,8 @@ func (p *HandshakePattern) TotalMessages() int {
 // NewPattern creates a HandshakePattern with validation.
 // Returns error for invalid patterns. Use mustNewPattern for predefined patterns.
 //
-// F10: Validates PSK rules and PQ token ordering.
-// F113: Auto-detects pattern type from tokens.
-// F114/F115: PSK cross-message + PQ per-message validation.
-// F116: Caches hasPSK from token scan.
+// Validates PSK position rules and PQ token ordering. Auto-detects pattern type
+// from tokens (DH, KEM, or Hybrid). Caches hasPSK from a token scan.
 func NewPattern(name string, initiatorMsgs, responderMsgs [][]Token,
 	preInit, preResp []Token, oneWay bool) (*HandshakePattern, error) {
 
@@ -203,13 +202,13 @@ func NewPattern(name string, initiatorMsgs, responderMsgs [][]Token,
 	copy(p.preInitiator[:], preInit)
 	copy(p.preResponder[:], preResp)
 
-	// F113: Auto-detect pattern type from tokens
+	// Auto-detect pattern type from tokens
 	p.patternType = detectPatternType(p)
 
-	// F116: Scan for PSK tokens
+	// Scan for PSK tokens
 	p.hasPSK = scanForPSK(p)
 
-	// F10/F114/F115: Validate PSK and PQ rules
+	// Validate PSK and PQ rules
 	if err := validatePSKRules(p); err != nil {
 		return nil, err
 	}
@@ -221,7 +220,7 @@ func NewPattern(name string, initiatorMsgs, responderMsgs [][]Token,
 }
 
 // mustNewPattern creates a pattern, panicking on invalid input.
-// F112: Used for predefined patterns (like template.Must).
+// Used for predefined patterns (like template.Must).
 func mustNewPattern(name string, initiatorMsgs, responderMsgs [][]Token,
 	preInit, preResp []Token, oneWay bool) *HandshakePattern {
 	p, err := NewPattern(name, initiatorMsgs, responderMsgs, preInit, preResp, oneWay)
@@ -232,7 +231,7 @@ func mustNewPattern(name string, initiatorMsgs, responderMsgs [][]Token,
 }
 
 // detectPatternType determines whether a pattern is DH, KEM, or Hybrid.
-// F113: Both DH and KEM tokens = HYBRID. Only KEM = KEM. Only DH = DH.
+// Both DH and KEM tokens = HYBRID. Only KEM = KEM. Only DH = DH.
 func detectPatternType(p *HandshakePattern) PatternType {
 	hasDH := false
 	hasKEM := false
@@ -265,7 +264,7 @@ func detectPatternType(p *HandshakePattern) PatternType {
 }
 
 // scanForPSK returns true if any message contains a PSK token.
-// F116: Cached at construction time.
+// Result is cached at construction time.
 func scanForPSK(p *HandshakePattern) bool {
 	for i := 0; i < p.numInitiator; i++ {
 		for j := 0; j < p.initiatorMsgs[i].count; j++ {
@@ -285,10 +284,10 @@ func scanForPSK(p *HandshakePattern) bool {
 }
 
 // validatePSKRules validates PSK position rules per Noise spec.
-// F114: PSK validation scans ACROSS messages (psk_sent persists).
-// F138: The own_randomness_applied check (PSK before first S) is enforced at
-//       RUNTIME in the handshake state machine (Batch 4), not here at construction.
-//       This function validates structural placement only.
+// PSK validation scans ACROSS messages (psk_sent persists).
+// The own_randomness_applied check (PSK before first S) is enforced at
+// RUNTIME in the handshake state machine, not here at construction.
+// This function validates structural placement only.
 //
 // Rule: PSK token can only appear at position 0 or after all other tokens in a message.
 func validatePSKRules(p *HandshakePattern) error {
@@ -319,7 +318,7 @@ func validatePSKRules(p *HandshakePattern) error {
 }
 
 // validatePQTokenOrder validates PQ-specific token ordering rules.
-// F115: PQ order validation is PER message (reset per message).
+// PQ order validation is PER message (reset per message).
 //
 // In PQ patterns, Ekem and Skem can appear in messages independently.
 // Ekem encapsulates to the remote's E (from a prior message).
@@ -364,7 +363,7 @@ func validatePQTokenOrder(p *HandshakePattern) error {
 // Predefined NQ (Classical DH) Patterns
 // ============================================================================
 
-// One-way patterns (F139: one-way patterns are NQ-only)
+// One-way patterns (NQ-only; no PQ or Hybrid one-way patterns exist)
 var (
 	PatternN = mustNewPattern("N",
 		[][]Token{{TokenE, TokenES}},
@@ -565,7 +564,7 @@ var (
 
 // ============================================================================
 // PQ (KEM-only) Patterns
-// F139: No one-way PQ patterns (N/K/X are NQ-only). PQ starts at NN.
+// No one-way PQ patterns (N/K/X are NQ-only). PQ starts at NN.
 // ============================================================================
 
 var (
@@ -760,7 +759,7 @@ var (
 
 // ============================================================================
 // Hybrid (DH+KEM) Patterns
-// F139: No one-way hybrid patterns. Hybrid starts at NN.
+// No one-way hybrid patterns. Hybrid starts at NN.
 //
 // Corrected from Clatter src/handshakepattern.rs (Batch 4, 2026-05-01).
 // Ekem/Skem tokens appear in the OPPOSING party's message, not grouped with E.

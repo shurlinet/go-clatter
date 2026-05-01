@@ -11,19 +11,11 @@ var _ Handshaker = (*NqHandshake)(nil)
 // NqHandshake implements the classical (non-quantum) Noise handshake.
 // Port of Rust Clatter's nq.rs. Uses DH-only tokens (E, S, EE, ES, SE, SS, PSK).
 //
-// Finding coverage:
-// F11/F79:  buildName produces exact protocol string matching Clatter
-// F12:      Ephemeral keys generated INSIDE WriteMessage, never from constructor
-// F36:      acquireUse/releaseUse atomic guard against concurrent access
-// F57:      ownRandApplied tracked for PSK validity
-// F62:      Sticky error state, no recovery
-// F138:     PSK validity check on write-side only (Token::S write)
-// F151:     Payload encrypt/decrypt always LAST after all tokens
-// F152:     Pre-message Token::E has different mix logic than message-body Token::E
-// F162:     Destroy() zeros ALL fields
-// F164:     setError() called on ANY failure
-// F171:     WriteMessage validates buffer size before processing
-// F172:     ReadMessage validates message length >= overhead before processing
+// Ephemeral keys are generated inside WriteMessage, never from the constructor.
+// An atomic guard prevents concurrent access. All state is zeroed immediately
+// on any error (sticky error, no recovery). PSK validity requires own-randomness
+// contribution before payload encryption. Pre-message Token::E has different mix
+// logic (conditional MixKey if hasPSK) than message-body Token::E.
 type NqHandshake struct {
 	HandshakeInternals
 	dh DH // DH algorithm (X25519)
@@ -81,7 +73,7 @@ func NewNqHandshake(
 		hs.rs = &KeyPair{Public: ho.remoteStatic}
 	}
 
-	// Process pre-messages (F152: pre-message E has different mix logic)
+	// Process pre-messages (pre-message E has different mix logic than message-body E)
 	if err := hs.processPreMessages(); err != nil {
 		hs.Destroy()
 		return nil, err
@@ -94,8 +86,8 @@ func NewNqHandshake(
 }
 
 // processPreMessages mixes pre-message tokens into the handshake hash.
-// F152: Pre-message Token::E mixes public key + conditional mixKey if hasPSK.
-// F46: Pre-message order is DH first, KEM second (NQ has no KEM, so DH only).
+// Pre-message Token::E mixes the public key, plus a conditional MixKey if the
+// pattern uses PSKs. Pre-message order is DH first, then KEM (NQ has no KEM).
 func (hs *NqHandshake) processPreMessages() error {
 	// Initiator pre-messages
 	preInit := hs.pattern.PreInitiator()
@@ -115,7 +107,7 @@ func (hs *NqHandshake) processPreMessages() error {
 				}
 				hs.symmetricState.MixHash(hs.re.Public)
 			}
-			// F152: conditional mixKey if hasPSK
+			// Conditional MixKey if pattern uses PSKs
 			if hs.pattern.HasPSK() {
 				var pubkey []byte
 				if hs.initiator {
@@ -192,11 +184,9 @@ func (hs *NqHandshake) processPreMessages() error {
 }
 
 // WriteMessage writes the next handshake message.
-// F12: Ephemeral keys generated here, never from constructor.
-// F36: Acquires exclusive access via atomic guard.
-// F151: Payload encrypted LAST after all tokens.
-// F164: setError called on ANY failure.
-// F171: Buffer size validated before processing.
+// Acquires exclusive access via atomic guard. Validates buffer size before
+// processing. Ephemeral keys are generated here (Token::E). Payload is
+// encrypted LAST after all tokens. State is zeroed on any failure.
 func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if err := hs.acquireUse(); err != nil {
 		return 0, err
@@ -210,7 +200,7 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 		return 0, ErrInvalidState
 	}
 
-	// F171: Check buffer size before processing
+	// Check buffer size before processing
 	overhead, err := hs.getNextMessageOverheadNQ()
 	if err != nil {
 		hs.setError(err)
@@ -226,7 +216,7 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: need %d bytes, have %d", ErrBufferTooSmall, needed, len(out))
 	}
 
-	// F66: getNextMessage increments index BEFORE token processing
+	// getNextMessage increments index BEFORE token processing
 	tokens, err := hs.getNextMessage()
 	if err != nil {
 		hs.setError(err)
@@ -244,14 +234,14 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 		offset += n
 	}
 
-	// F86: Post-payload PSK validity check (Rust: after all tokens, before encrypt)
+	// Post-payload PSK validity check (after all tokens, before encrypt)
 	if len(payload) > 0 && hs.pskApplied && !hs.ownRandApplied {
 		err = fmt.Errorf("%w: PSK requires own randomness before payload", ErrPSKInvalid)
 		hs.setError(err)
 		return 0, err
 	}
 
-	// F151: Payload encrypted LAST after all tokens.
+	// Payload encrypted LAST after all tokens.
 	// Always call EncryptAndHash even for empty payload - it MixHashes the result
 	// which is required for handshake hash to match Rust (verified empirically).
 	ct, encErr := hs.symmetricState.EncryptAndHash(payload)
@@ -268,10 +258,8 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 }
 
 // ReadMessage reads and processes an incoming handshake message.
-// F36: Acquires exclusive access.
-// F151: Payload decrypted LAST.
-// F164: setError called on ANY failure.
-// F172: Message length validated >= overhead.
+// Acquires exclusive access. Validates message length >= overhead.
+// Payload is decrypted LAST. State is zeroed on any failure.
 func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 	if err := hs.acquireUse(); err != nil {
 		return 0, err
@@ -285,7 +273,7 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 		return 0, ErrInvalidState
 	}
 
-	// F172: Validate message length
+	// Validate message length
 	overhead, err := hs.getNextMessageOverheadNQ()
 	if err != nil {
 		hs.setError(err)
@@ -302,14 +290,14 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 		return 0, err
 	}
 
-	// F66: getNextMessage increments index BEFORE token processing
+	// getNextMessage increments index BEFORE token processing
 	tokens, err := hs.getNextMessage()
 	if err != nil {
 		hs.setError(err)
 		return 0, err
 	}
 
-	// F160: messageReader for stateful parsing
+	// Stateful message parser
 	reader := newMessageReader(message)
 
 	for _, token := range tokens {
@@ -319,7 +307,7 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 		}
 	}
 
-	// F151: Payload decrypted LAST.
+	// Payload decrypted LAST.
 	// Always call DecryptAndHash even for empty remaining - it MixHashes the ciphertext.
 	remaining := reader.rest()
 	pt, decErr := hs.symmetricState.DecryptAndHash(remaining)
@@ -345,8 +333,7 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 }
 
 // Finalize extracts transport keys and zeros handshake state.
-// F117: Sets finalized=true, prevents double-finalize.
-// F124: Requires HasKey (at least one MixKey occurred).
+// Can only be called once; subsequent calls return ErrAlreadyFinished.
 func (hs *NqHandshake) Finalize() (*TransportState, error) {
 	if err := hs.acquireUse(); err != nil {
 		return nil, err
@@ -370,7 +357,7 @@ func (hs *NqHandshake) Finalize() (*TransportState, error) {
 	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
 
 	hs.finalized = true
-	// F162: Zero ALL handshake state after finalize
+	// Zero ALL handshake state after finalize
 	hs.Destroy()
 
 	return ts, nil
@@ -384,15 +371,16 @@ func (hs *NqHandshake) GetNextMessageOverhead() (int, error) {
 	return hs.getNextMessageOverheadNQ()
 }
 
-// Destroy zeros ALL fields in the NQ handshake.
-// F128/F162: Zeros HandshakeInternals + NQ-specific dh field.
+// Destroy zeros ALL fields in the NQ handshake, including the
+// HandshakeInternals and the DH reference.
 func (hs *NqHandshake) Destroy() {
 	hs.HandshakeInternals.Destroy()
 	hs.dh = nil
 }
 
 // getNextMessageOverheadNQ calculates overhead for the next NQ message.
-// F68: Simulates has_key() changes during token processing for accurate overhead.
+// Simulates HasKey state changes during token processing for accurate overhead
+// prediction (e.g., Token::E with PSK establishes a key, affecting Token::S overhead).
 func (hs *NqHandshake) getNextMessageOverheadNQ() (int, error) {
 	// Peek at next message tokens without advancing index
 	var tokens []Token
@@ -426,7 +414,7 @@ func (hs *NqHandshake) getNextMessageOverheadNQ() (int, error) {
 	}
 
 	overhead := 0
-	// F68: Simulate has_key() to predict overhead accurately
+	// Simulate HasKey to predict overhead accurately
 	hasKey := hs.symmetricState.HasKey()
 	dhPubLen := hs.dh.PubKeyLen()
 
@@ -518,9 +506,11 @@ func (hs *NqHandshake) processReadToken(token Token, reader *messageReader) erro
 	}
 }
 
-// writeTokenE generates or uses pre-set ephemeral key, writes pubkey, mixes.
-// F12: Ephemeral generated HERE, inside WriteMessage (unless pre-set via WithEphemeralKey).
-// F57: Sets ownRandApplied.
+// writeTokenE generates or uses a pre-set ephemeral key, writes the public key
+// to the output buffer, and mixes it into the handshake state.
+// Ephemeral keys are generated HERE inside WriteMessage (not from the constructor),
+// unless pre-set via WithEphemeralKey for deterministic test vectors.
+// Sets ownRandApplied to satisfy PSK validity requirements.
 func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
 	if hs.e == nil {
 		// No pre-set ephemeral: generate fresh (normal production path)
@@ -535,7 +525,7 @@ func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
 	// Mix into handshake hash (Rust order: MixHash -> MixKey -> copy -> set flag)
 	hs.symmetricState.MixHash(hs.e.Public)
 
-	// F152: Message-body Token::E does conditional mixKey if hasPSK
+	// Message-body Token::E does conditional MixKey if pattern uses PSKs
 	if hs.pattern.HasPSK() {
 		if err := hs.symmetricState.MixKey(hs.e.Public); err != nil {
 			return 0, err
@@ -545,7 +535,7 @@ func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
 	// Write ephemeral pubkey to output
 	n := copy(out, hs.e.Public)
 
-	// F57: Set AFTER crypto ops + write (matches Rust order)
+	// Set AFTER crypto ops + write (matches Rust order)
 	hs.ownRandApplied = true
 
 	return n, nil
@@ -564,7 +554,7 @@ func (hs *NqHandshake) readTokenE(reader *messageReader) error {
 
 	hs.symmetricState.MixHash(hs.re.Public)
 
-	// F152: conditional mixKey if hasPSK
+	// Conditional MixKey if pattern uses PSKs
 	if hs.pattern.HasPSK() {
 		if err := hs.symmetricState.MixKey(hs.re.Public); err != nil {
 			return err
@@ -575,13 +565,13 @@ func (hs *NqHandshake) readTokenE(reader *messageReader) error {
 }
 
 // writeTokenS encrypts and writes local static public key.
-// F138: PSK validity check on write-side only.
+// Validates PSK own-randomness requirement on write-side only.
 func (hs *NqHandshake) writeTokenS(out []byte) (int, error) {
 	if hs.s == nil {
 		return 0, fmt.Errorf("%w: static key required for Token::S", ErrMissingKey)
 	}
 
-	// F86/F138: PSK validity check - if PSK was applied, must have own randomness
+	// PSK validity check: if PSK was applied, must have own randomness
 	if hs.pskApplied && !hs.ownRandApplied {
 		return 0, fmt.Errorf("%w: PSK requires own randomness before Token::S", ErrPSKInvalid)
 	}
@@ -618,9 +608,8 @@ func (hs *NqHandshake) readTokenS(reader *messageReader) error {
 	return nil
 }
 
-// doDH performs DH between local keypair and remote public key, then MixKey.
-// F78: DH can fail - propagate error.
-// F84: Low-order points caught by X25519 impl (returns zeros or error).
+// doDH performs DH between a local keypair and a remote public key, then MixKey.
+// DH can fail (e.g., low-order points caught by X25519).
 func (hs *NqHandshake) doDH(local, remote *KeyPair) error {
 	if local == nil || remote == nil {
 		return fmt.Errorf("%w: DH requires both keypairs", ErrMissingKey)
@@ -635,10 +624,10 @@ func (hs *NqHandshake) doDH(local, remote *KeyPair) error {
 	return hs.symmetricState.MixKey(ss)
 }
 
-// processTokenPsk mixes a pre-shared key.
-// F86: Sets pskApplied for validity checks. Does NOT set ownRandApplied.
-// PSK is a pre-shared secret, not locally-generated randomness.
-// Only Token::E satisfies the own-randomness requirement in NQ (F90).
+// processTokenPsk mixes a pre-shared key via MixKeyAndHash.
+// Sets pskApplied for validity checks. Does NOT set ownRandApplied because
+// a PSK is a pre-shared secret, not locally-generated randomness.
+// Only Token::E satisfies the own-randomness requirement in NQ.
 func (hs *NqHandshake) processTokenPsk() error {
 	psk, err := hs.psks.Pop()
 	if err != nil {
@@ -650,13 +639,12 @@ func (hs *NqHandshake) processTokenPsk() error {
 		}
 	}()
 
-	hs.pskApplied = true // F86: runtime PSK tracking (NOT ownRandApplied)
+	hs.pskApplied = true
 	return hs.symmetricState.MixKeyAndHash(psk[:])
 }
 
 // nqBuildName constructs the Noise protocol name for NQ handshakes.
-// F11/F79: Format: "Noise_{pattern}_{DH}_{Cipher}_{Hash}"
-// F154: NQ has exactly one format (simplest of the 5 variants).
+// Format: "Noise_{pattern}_{DH}_{Cipher}_{Hash}"
 func nqBuildName(pattern *HandshakePattern, suite CipherSuite) string {
 	return fmt.Sprintf("Noise_%s_%s_%s_%s",
 		pattern.Name(),

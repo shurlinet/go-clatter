@@ -64,7 +64,7 @@ func (k *MlKem768) Encapsulate(pk []byte, rng clatter.RNG) (ct, ss []byte, err e
 	}
 
 	if k.testing {
-		// Deterministic: read 32 bytes from rng as entropy (F175)
+		// Deterministic: read 32 bytes from rng as entropy
 		var entropy [32]byte
 		defer func() {
 			for i := range entropy {

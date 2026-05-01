@@ -15,7 +15,7 @@ type DH interface {
 	// GenerateKeypair generates a new keypair using the given RNG.
 	GenerateKeypair(rng RNG) (KeyPair, error)
 	// DH performs DH between our secret and their public key.
-	// Returns the shared secret. Returns zeros on low-order input (F84).
+	// Returns the shared secret. Returns zeros on low-order input.
 	DH(kp KeyPair, pubkey []byte) ([]byte, error)
 	// PubKeyLen returns the public key length in bytes.
 	PubKeyLen() int
@@ -27,7 +27,7 @@ type Cipher interface {
 	Name() string
 	// Encrypt encrypts plaintext with the given key, nonce, and AD.
 	// Appends the authentication tag. out must have room for plaintext + TagLen().
-	// In-place: out may alias plaintext (F104 verified).
+	// In-place: out may alias plaintext (verified empirically).
 	Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []byte) ([]byte, error)
 	// Decrypt decrypts ciphertext with the given key, nonce, and AD.
 	// out must have room for ciphertext - TagLen().

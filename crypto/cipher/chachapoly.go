@@ -9,7 +9,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// ChaChaPoly implements ChaCha20-Poly1305 with little-endian nonce encoding (F5).
+// ChaChaPoly implements ChaCha20-Poly1305 with little-endian nonce encoding.
 type ChaChaPoly struct{}
 
 // NewChaChaPoly returns a ChaChaPoly cipher instance.
@@ -19,7 +19,7 @@ func (c *ChaChaPoly) Name() string { return "ChaChaPoly" }
 func (c *ChaChaPoly) TagLen() int  { return 16 }
 func (c *ChaChaPoly) KeyLen() int  { return 32 }
 
-// chachaPolyNonce constructs a 12-byte nonce: 4 zero bytes + 8 LE nonce (F5, F101).
+// chachaPolyNonce constructs a 12-byte nonce: 4 zero bytes + 8 little-endian nonce.
 func chachaPolyNonce(n uint64) [12]byte {
 	var nonce [12]byte
 	binary.LittleEndian.PutUint64(nonce[4:], n)
@@ -32,7 +32,7 @@ func (c *ChaChaPoly) Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []by
 		return nil, fmt.Errorf("%w: %v", clatter.ErrCipher, err)
 	}
 	n := chachaPolyNonce(nonce)
-	// In-place: Seal appends to out[:0], which may alias plaintext (F104).
+	// In-place: Seal appends to out[:0], which may alias plaintext.
 	result := aead.Seal(out[:0], n[:], plaintext, ad)
 	return result, nil
 }

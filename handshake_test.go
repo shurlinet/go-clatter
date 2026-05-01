@@ -28,7 +28,7 @@ func TestHandshakeInternals_InitialStatus(t *testing.T) {
 	}
 }
 
-// TestHandshakeInternals_GetNextMessage_4WayDispatch verifies F129.
+// TestHandshakeInternals_GetNextMessage_4WayDispatch verifies 4-way dispatch.
 func TestHandshakeInternals_GetNextMessage_4WayDispatch(t *testing.T) {
 	// XX pattern: initiator sends 2, responder sends 1
 	// initiator: msg0=[e], msg1=[s,se]
@@ -47,11 +47,11 @@ func TestHandshakeInternals_GetNextMessage_4WayDispatch(t *testing.T) {
 	if len(tokens) != 1 || tokens[0] != TokenE {
 		t.Errorf("expected [E], got %v", tokens)
 	}
-	if h.initIdx != 1 { // F66: index incremented before processing
+	if h.initIdx != 1 { // index incremented before processing
 		t.Errorf("expected initIdx=1, got %d", h.initIdx)
 	}
 
-	// Case 2: Initiator reading (StatusReceive) - reads responder pattern (F88)
+	// Case 2: Initiator reading (StatusReceive) - reads responder pattern
 	h.status = StatusReceive
 	tokens, err = h.getNextMessage()
 	if err != nil {
@@ -83,7 +83,7 @@ func TestHandshakeInternals_GetNextMessage_4WayDispatch(t *testing.T) {
 		initiator: false,
 		status:    StatusReceive,
 	}
-	// Responder reading = reads initiator pattern (F88)
+	// Responder reading = reads initiator pattern
 	tokens, err = h2.getNextMessage()
 	if err != nil {
 		t.Fatalf("responder read failed: %v", err)
@@ -117,7 +117,7 @@ func TestHandshakeInternals_IndexOverflow(t *testing.T) {
 	}
 }
 
-// TestHandshakeInternals_UpdateStatus verifies F87: both indices must match.
+// TestHandshakeInternals_UpdateStatus verifies both indices must match.
 func TestHandshakeInternals_UpdateStatus(t *testing.T) {
 	h := &HandshakeInternals{
 		pattern:   PatternNN,
@@ -170,7 +170,7 @@ func TestHandshakeInternals_StatusToggle(t *testing.T) {
 	}
 }
 
-// TestHandshakeInternals_SetError verifies F63/F164: state zeroed, pointers nil'd.
+// TestHandshakeInternals_SetError verifies state is zeroed, pointers nil'd.
 func TestHandshakeInternals_SetError(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_protocol")
 	kp := NewKeyPair([]byte{1, 2, 3}, []byte{4, 5, 6})
@@ -195,7 +195,7 @@ func TestHandshakeInternals_SetError(t *testing.T) {
 	}
 }
 
-// TestHandshakeInternals_Destroy verifies F128 and nil-on-destroy.
+// TestHandshakeInternals_Destroy verifies nil-on-destroy.
 func TestHandshakeInternals_Destroy(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "destroy_test")
 	kp := NewKeyPair(make([]byte, 32), make([]byte, 32))
@@ -236,7 +236,7 @@ func TestHandshakeInternals_Destroy(t *testing.T) {
 	}
 }
 
-// TestHandshakeInternals_ConcurrentUse verifies F36 atomic guard.
+// TestHandshakeInternals_ConcurrentUse verifies atomic guard.
 func TestHandshakeInternals_ConcurrentUse(t *testing.T) {
 	h := &HandshakeInternals{}
 
@@ -303,7 +303,7 @@ func TestHandshakeInternals_CheckState(t *testing.T) {
 	}
 }
 
-// TestMessageReader verifies F160 stateful message parsing.
+// TestMessageReader verifies stateful message parsing.
 func TestMessageReader(t *testing.T) {
 	data := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 	r := newMessageReader(data)

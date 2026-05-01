@@ -9,7 +9,7 @@ import (
 	clatter "github.com/shurlinet/go-clatter"
 )
 
-// AesGcm implements AES-256-GCM with big-endian nonce encoding (F5, F102).
+// AesGcm implements AES-256-GCM with big-endian nonce encoding.
 type AesGcm struct{}
 
 // NewAesGcm returns an AES-256-GCM cipher instance.
@@ -19,7 +19,7 @@ func (a *AesGcm) Name() string { return "AESGCM" }
 func (a *AesGcm) TagLen() int  { return 16 }
 func (a *AesGcm) KeyLen() int  { return 32 }
 
-// aesGcmNonce constructs a 12-byte nonce: 4 zero bytes + 8 BE nonce (F5, F102).
+// aesGcmNonce constructs a 12-byte nonce: 4 zero bytes + 8 big-endian nonce.
 func aesGcmNonce(n uint64) [12]byte {
 	var nonce [12]byte
 	binary.BigEndian.PutUint64(nonce[4:], n)

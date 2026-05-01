@@ -5,13 +5,11 @@ import "fmt"
 // TransportState holds post-handshake encryption keys for secure communication.
 // Port of Rust Clatter's transportstate.rs.
 //
-// F131: MaxMessageLen violations return error, not panic.
-// F132: One-way pattern enforcement (ErrOneWayViolation).
-// F133: SetReceivingNonce exists, SetSendingNonce intentionally absent.
-// F134: Explicit Destroy() zeros both CipherStates.
-// F135: Rekey does NOT reset nonce.
-// F136: send_vec/receive_vec (heap-allocating) omitted from Go API.
-// F140: Take() returns CipherStates, marks destroyed.
+// Message length violations return errors (never panic). One-way patterns
+// enforce directional restrictions: only the initiator may send, only the
+// responder may receive. SetReceivingNonce is provided for nonce synchronization;
+// SetSendingNonce is intentionally absent (callers should not manipulate outbound
+// nonces). Rekey rotates the cipher key without resetting the nonce counter.
 type TransportState struct {
 	initiatorToResponder *CipherState
 	responderToInitiator *CipherState
@@ -33,8 +31,8 @@ func newTransportState(cs1, cs2 *CipherState, pattern *HandshakePattern, h []byt
 }
 
 // Send encrypts payload for sending to the remote party.
-// F131: Returns error when message exceeds MaxMessageLen.
-// F132: One-way enforcement - responder cannot send after one-way handshake.
+// Returns error when payload + tag exceeds MaxMessageLen, or when a
+// responder attempts to send on a one-way pattern.
 func (ts *TransportState) Send(payload, out []byte) (int, error) {
 	if ts.destroyed {
 		return 0, ErrDestroyed
@@ -48,7 +46,7 @@ func (ts *TransportState) Send(payload, out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: need %d bytes, have %d", ErrBufferTooSmall, outLen, len(out))
 	}
 
-	// F132: One-way pattern enforcement
+	// One-way pattern enforcement: responder cannot send.
 	if ts.pattern != nil && ts.pattern.IsOneWay() && !ts.initiator {
 		return 0, ErrOneWayViolation
 	}
@@ -96,8 +94,8 @@ func (ts *TransportState) SendInPlace(msg []byte, msgLen int) (int, error) {
 }
 
 // Receive decrypts a message from the remote party.
-// F131: Returns error when message exceeds MaxMessageLen.
-// F132: One-way enforcement - initiator cannot receive after one-way handshake.
+// Returns error when message exceeds MaxMessageLen, or when an initiator
+// attempts to receive on a one-way pattern.
 func (ts *TransportState) Receive(message, out []byte) (int, error) {
 	if ts.destroyed {
 		return 0, ErrDestroyed
@@ -179,7 +177,8 @@ func (ts *TransportState) ReceivingNonce() uint64 {
 }
 
 // SetReceivingNonce sets the forthcoming inbound nonce value.
-// F133: SetReceivingNonce exists; SetSendingNonce intentionally absent.
+// Only the receiving nonce may be set; the sending nonce is intentionally
+// read-only to prevent callers from desynchronizing the outbound stream.
 func (ts *TransportState) SetReceivingNonce(nonce uint64) {
 	cs := ts.receiveCipher()
 	if cs != nil {
@@ -188,7 +187,7 @@ func (ts *TransportState) SetReceivingNonce(nonce uint64) {
 }
 
 // RekeySender rekeys the outbound cipher.
-// F135: Rekey does NOT reset nonce.
+// The nonce counter is NOT reset - rekeying only rotates the key material.
 func (ts *TransportState) RekeySender() error {
 	if ts.destroyed {
 		return ErrDestroyed
@@ -201,7 +200,7 @@ func (ts *TransportState) RekeySender() error {
 }
 
 // RekeyReceiver rekeys the inbound cipher.
-// F135: Rekey does NOT reset nonce.
+// The nonce counter is NOT reset - rekeying only rotates the key material.
 func (ts *TransportState) RekeyReceiver() error {
 	if ts.destroyed {
 		return ErrDestroyed
@@ -225,7 +224,8 @@ func (ts *TransportState) GetHandshakeHash() []byte {
 }
 
 // Take returns both CipherStates and marks this TransportState as destroyed.
-// F140: Consumes the TransportState (caller takes ownership of keys).
+// The caller takes ownership of the returned keys and is responsible for
+// destroying them when done.
 func (ts *TransportState) Take() (initiatorToResponder, responderToInitiator *CipherState) {
 	i2r := ts.initiatorToResponder
 	r2i := ts.responderToInitiator
@@ -238,7 +238,6 @@ func (ts *TransportState) Take() (initiatorToResponder, responderToInitiator *Ci
 }
 
 // Destroy zeros both CipherStates and the handshake hash.
-// F134: TransportState needs explicit Destroy.
 func (ts *TransportState) Destroy() {
 	if ts.initiatorToResponder != nil {
 		ts.initiatorToResponder.Destroy()

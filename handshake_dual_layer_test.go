@@ -666,7 +666,7 @@ func TestTransportState_Rekey(t *testing.T) {
 		t.Fatalf("rekey receiver: %v", err)
 	}
 
-	// F135: Nonce should NOT have reset
+	// Nonce should NOT have reset
 	if iTS.SendingNonce() == 0 {
 		t.Fatal("nonce should not reset after rekey")
 	}
@@ -726,7 +726,7 @@ func TestTransportState_NonceManagement(t *testing.T) {
 		t.Fatalf("receiving nonce should be 1, got %d", rTS.ReceivingNonce())
 	}
 
-	// F133: SetReceivingNonce
+	// SetReceivingNonce
 	iTS.SetReceivingNonce(42)
 	if iTS.ReceivingNonce() != 42 {
 		t.Fatalf("receiving nonce should be 42, got %d", iTS.ReceivingNonce())
@@ -989,7 +989,7 @@ func TestDualLayerHandshake_DoubleFinalize(t *testing.T) {
 	}
 	defer ts.Destroy()
 
-	// Second finalize should return ErrAlreadyFinished (F117)
+	// Second finalize should return ErrAlreadyFinished
 	_, err = alice.Finalize()
 	if !errors.Is(err, clatter.ErrAlreadyFinished) {
 		t.Fatalf("second finalize should return ErrAlreadyFinished, got: %v", err)

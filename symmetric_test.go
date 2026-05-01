@@ -9,7 +9,7 @@ import (
 
 // reuse testSha256/testSha512 from hash_test.go (same package)
 
-// F119: Same protocol name, SHA-256 (HASHLEN=32) hashes it, SHA-512 (HASHLEN=64) pads it.
+// Same protocol name, SHA-256 (HASHLEN=32) hashes it, SHA-512 (HASHLEN=64) pads it.
 func TestSymmetricState_InitHashVsPad(t *testing.T) {
 	// 48-byte name: > 32 (SHA-256 hashes), <= 64 (SHA-512 pads)
 	name := "Noise_XX_25519+MLKEM768_ChaChaPoly_SHA256xx" // 44 bytes, adjust
@@ -45,7 +45,7 @@ func TestSymmetricState_InitHashVsPad(t *testing.T) {
 	}
 }
 
-// F122: Protocol name exactly equal to HASHLEN is PADDED (<=), not hashed.
+// Protocol name exactly equal to HASHLEN is PADDED (<=), not hashed.
 func TestSymmetricState_ExactHashLenIsPadded(t *testing.T) {
 	// Exactly 32 bytes for SHA-256
 	name := "Noise_XX_25519_ChaChaPoly_SHA256" // 32 bytes
@@ -68,7 +68,7 @@ func TestSymmetricState_ExactHashLenIsPadded(t *testing.T) {
 	}
 }
 
-// F120: ck = h (array copy, not alias). Mutating h should not affect ck.
+// ck = h (array copy, not alias). Mutating h should not affect ck.
 func TestSymmetricState_CKNotAliasedToH(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_protocol")
 
@@ -94,7 +94,7 @@ func TestSymmetricState_CKNotAliasedToH(t *testing.T) {
 	}
 }
 
-// F165: Before MixKey, HasKey is false. EncryptAndHash copies plaintext verbatim.
+// Before MixKey, HasKey is false. EncryptAndHash copies plaintext verbatim.
 func TestSymmetricState_NoKeyVerbatimCopy(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test")
 
@@ -102,7 +102,7 @@ func TestSymmetricState_NoKeyVerbatimCopy(t *testing.T) {
 		t.Fatal("should not have key before MixKey")
 	}
 
-	// F31: encrypt without key = verbatim copy
+	// Encrypt without key = verbatim copy
 	plaintext := []byte("hello world")
 	ct, err := ss.EncryptAndHash(plaintext)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestSymmetricState_NoKeyVerbatimCopy(t *testing.T) {
 	}
 }
 
-// F31: decrypt without key = verbatim copy
+// Decrypt without key = verbatim copy
 func TestSymmetricState_NoKeyDecryptVerbatim(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test")
 
@@ -127,7 +127,7 @@ func TestSymmetricState_NoKeyDecryptVerbatim(t *testing.T) {
 	}
 }
 
-// F28: encryptAndHash and decryptAndHash hash CIPHERTEXT, not plaintext.
+// EncryptAndHash and decryptAndHash hash CIPHERTEXT, not plaintext.
 // Both sides should agree on h after encrypt+decrypt.
 func TestSymmetricState_HashesCiphertextNotPlaintext(t *testing.T) {
 	ss1 := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_protocol")
@@ -155,7 +155,7 @@ func TestSymmetricState_HashesCiphertextNotPlaintext(t *testing.T) {
 		t.Fatal("round-trip failed")
 	}
 
-	// F28: Both sides should have identical h after (both mixed the ciphertext)
+	// Both sides should have identical h after (both mixed the ciphertext)
 	h1 := ss1.GetHandshakeHash()
 	h2 := ss2.GetHandshakeHash()
 	if !bytes.Equal(h1, h2) {
@@ -163,7 +163,7 @@ func TestSymmetricState_HashesCiphertextNotPlaintext(t *testing.T) {
 	}
 }
 
-// F29: MixKey destroys old CipherState before replacing.
+// MixKey destroys old CipherState before replacing.
 func TestSymmetricState_MixKeyDestroysOld(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test")
 
@@ -183,7 +183,7 @@ func TestSymmetricState_MixKeyDestroysOld(t *testing.T) {
 	}
 }
 
-// F30: Truncate HKDF output to KeyLen for 64-byte hashes.
+// Truncate HKDF output to KeyLen for 64-byte hashes.
 func TestSymmetricState_SHA512TruncatesToKeyLen(t *testing.T) {
 	ss := InitializeSymmetric(&testSha512{}, &testCipher{}, "test_sha512")
 
@@ -198,7 +198,7 @@ func TestSymmetricState_SHA512TruncatesToKeyLen(t *testing.T) {
 	}
 }
 
-// F38: Output size differs based on HasKey.
+// Output size differs based on HasKey.
 func TestSymmetricState_EncryptOutputSize(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test")
 	plaintext := []byte("hello")
@@ -224,7 +224,7 @@ func TestSymmetricState_EncryptOutputSize(t *testing.T) {
 	}
 }
 
-// F63: SetError zeros all state immediately.
+// SetError zeros all state immediately.
 func TestSymmetricState_SetErrorZerosState(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_error")
 	ss.MixKey(bytes.Repeat([]byte{0xff}, 32))
@@ -263,7 +263,7 @@ func TestSymmetricState_Split(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// F109: Both at nonce 0
+	// Both at nonce 0
 	if cs1.Nonce() != 0 {
 		t.Fatal("cs1 nonce should be 0")
 	}
@@ -285,7 +285,7 @@ func TestSymmetricState_Split(t *testing.T) {
 	cs2.Destroy()
 }
 
-// F124: Split without key returns error.
+// Split without key returns error.
 func TestSymmetricState_SplitWithoutKey(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_no_key")
 
@@ -295,7 +295,7 @@ func TestSymmetricState_SplitWithoutKey(t *testing.T) {
 	}
 }
 
-// F62: Sticky error blocks all further operations.
+// Sticky error blocks all further operations.
 func TestSymmetricState_StickyErrorBlocksOps(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_sticky")
 	ss.MixKey(bytes.Repeat([]byte{0x42}, 32))
@@ -343,7 +343,7 @@ func TestSymmetricState_MixKeyAndHash(t *testing.T) {
 	}
 }
 
-// F29: MixKeyAndHash also destroys old CipherState.
+// MixKeyAndHash also destroys old CipherState.
 func TestSymmetricState_MixKeyAndHashDestroysOld(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test")
 
@@ -393,7 +393,7 @@ func TestSymmetricState_MixHashDeterministic(t *testing.T) {
 	}
 }
 
-// F119: Protocol name longer than HASHLEN gets hashed.
+// Protocol name longer than HASHLEN gets hashed.
 func TestSymmetricState_LongNameHashed(t *testing.T) {
 	// 64-byte name with SHA-256 (HASHLEN=32): should be hashed
 	name := "Noise_hybridXX_25519+MLKEM768_ChaChaPoly_SHA256_extra_padding!!"
@@ -411,7 +411,7 @@ func TestSymmetricState_LongNameHashed(t *testing.T) {
 	}
 }
 
-// F119: Short name gets padded.
+// Short name gets padded.
 func TestSymmetricState_ShortNamePadded(t *testing.T) {
 	name := "test"
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, name)
@@ -471,7 +471,7 @@ func TestSymmetricState_FullRoundTrip(t *testing.T) {
 	}
 }
 
-// F118 deeper test: verify HKDF via SymmetricState doesn't corrupt ck
+// Deeper test: verify HKDF via SymmetricState doesn't corrupt ck
 // by calling MixKey twice and checking second result is correct.
 func TestSymmetricState_DoubleMixKeyCorrectness(t *testing.T) {
 	h := &testSha256{}
@@ -525,7 +525,7 @@ func TestSymmetricState_HKDFCounterEndToEnd(t *testing.T) {
 	}
 }
 
-// F30 end-to-end: SHA-512 SymmetricState Split produces 32-byte keys.
+// End-to-end: SHA-512 SymmetricState Split produces 32-byte keys.
 func TestSymmetricState_SHA512SplitKeyLen(t *testing.T) {
 	ss := InitializeSymmetric(&testSha512{}, &testCipher{}, "test_sha512_split")
 	ss.MixKey(bytes.Repeat([]byte{0x42}, 32))

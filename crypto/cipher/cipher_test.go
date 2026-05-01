@@ -71,7 +71,7 @@ func TestAesGcm(t *testing.T) {
 }
 
 func TestChaChaPoly_NonceLE(t *testing.T) {
-	// Verify nonce encoding is little-endian (F5, F101)
+	// Verify nonce encoding is little-endian
 	n := chachaPolyNonce(1)
 	// First 4 bytes zero, then LE uint64(1)
 	if n[4] != 1 {
@@ -85,7 +85,7 @@ func TestChaChaPoly_NonceLE(t *testing.T) {
 }
 
 func TestAesGcm_NonceBE(t *testing.T) {
-	// Verify nonce encoding is big-endian (F5, F102)
+	// Verify nonce encoding is big-endian
 	n := aesGcmNonce(1)
 	// First 4 bytes zero, then BE uint64(1) -> last byte is 1
 	if n[11] != 1 {
@@ -99,7 +99,7 @@ func TestAesGcm_NonceBE(t *testing.T) {
 }
 
 func TestNonce_MaxValue(t *testing.T) {
-	// Verify MaxUint64 nonce encodes correctly (used by Rekey, F54)
+	// Verify MaxUint64 nonce encodes correctly (used by Rekey)
 	chNonce := chachaPolyNonce(^uint64(0))
 	var val uint64
 	val = binary.LittleEndian.Uint64(chNonce[4:])
@@ -151,7 +151,7 @@ func TestCipher_EmptyPlaintext(t *testing.T) {
 }
 
 func TestCipher_InPlace(t *testing.T) {
-	// F104: in-place Seal/Open verified for both ciphers
+	// In-place Seal/Open verified for both ciphers
 	for _, c := range []struct {
 		name string
 		c    interface {

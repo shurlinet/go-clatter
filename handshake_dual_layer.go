@@ -4,7 +4,7 @@ import "fmt"
 
 // hybridDualLayerDomain is the domain separator mixed into the inner handshake
 // after the outer handshake completes. Exact bytes from Rust Clatter constants.rs.
-// F8: Any deviation = silent incompatibility.
+// Any deviation produces silent incompatibility.
 // Unexported to prevent external mutation of the shared slice.
 var hybridDualLayerDomain = []byte("clatter.hybrid_dual_layer.outer")
 
@@ -15,27 +15,25 @@ var hybridDualLayerDomain = []byte("clatter.hybrid_dual_layer.outer")
 // WARNING: This is a naive approach which does NOT cryptographically bind
 // the layers together. Use HybridDualLayerHandshake for bound layers.
 //
-// F7:  Buffer sized at runtime from inner handshake max message.
-// F93: Overhead includes outer transport tag when inner phase active.
-// F94: outerReceiveBuf holds largest inner handshake message.
-// F95: sendInPlace bounds-checked before call.
-// F96: go-clatter adds outer tag to overhead (differs from Clatter upstream).
-// F97: updateOuterState runs after both write and read.
-// F98: Two consecutive writes possible (always use IsWriteTurn).
+// The buffer is sized at runtime from the inner handshake max message.
+// During inner phase, overhead includes the outer transport tag.
+// Two consecutive writes are possible (always use IsWriteTurn).
+// go-clatter adds the outer tag to overhead, which differs from Clatter
+// upstream (which may undercount).
 type DualLayerHandshake struct {
 	outer          Handshaker
 	inner          Handshaker
 	outerTransport *TransportState
 	outerFinished  bool
-	finalized      bool   // F117: guards against double-finalize
-	outerRecvBuf   []byte // F94: sized to max inner message
+	finalized      bool   // guards against double-finalize
+	outerRecvBuf   []byte // sized to max inner message
 	initiator      bool
 }
 
 // NewDualLayerHandshake creates a dual-layer handshake.
 // outer completes first, then inner benefits from outer's transport encryption.
 // bufSize is the intermediate decrypt buffer size. Must be large enough for
-// all inner handshake messages. F7: calculated at runtime.
+// all inner handshake messages (calculated at runtime).
 //
 // Returns error if:
 // - outer and inner have different roles (both must be initiator or both responder)
@@ -101,7 +99,7 @@ func (dl *DualLayerHandshake) OuterCompleted() bool {
 }
 
 // updateOuterState checks if the outer handshake finished and transitions.
-// F97: Called after BOTH write and read operations.
+// Called after BOTH write and read operations.
 // Plain DualLayer: no domain binding (outer finalized, transport stored).
 func (dl *DualLayerHandshake) updateOuterState() error {
 	if dl.outer != nil && dl.outer.IsFinished() {
@@ -121,14 +119,14 @@ func (dl *DualLayerHandshake) updateOuterState() error {
 // WriteMessage writes the next handshake message.
 // During outer phase: delegates to outer handshaker.
 // During inner phase: inner writes to out, then outer transport encrypts in-place.
-// F93: Buffer must account for inner message + outer transport tag.
-// F163: MaxMessageLen checked at this layer (Rust traits.rs wrapper does the same).
+// Buffer must account for inner message + outer transport tag.
+// MaxMessageLen checked at this layer (Rust traits.rs wrapper does the same).
 func (dl *DualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if dl.finalized {
 		return 0, ErrAlreadyFinished
 	}
 	if dl.outerFinished {
-		// F163: Check total output won't exceed MaxMessageLen
+		// Check total output won't exceed MaxMessageLen
 		overhead, err := dl.GetNextMessageOverhead()
 		if err != nil {
 			return 0, err
@@ -147,7 +145,7 @@ func (dl *DualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		// F95: Bounds check before sendInPlace
+		// Bounds check before SendInPlace
 		n, err = dl.outerTransport.SendInPlace(out, n)
 		if err != nil {
 			return 0, err
@@ -160,7 +158,7 @@ func (dl *DualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// F97: updateOuterState after write
+	// updateOuterState after write
 	if err := dl.updateOuterState(); err != nil {
 		return 0, err
 	}
@@ -181,7 +179,7 @@ func (dl *DualLayerHandshake) ReadMessage(message, out []byte) (int, error) {
 			return 0, err
 		}
 		payloadN, readErr := dl.inner.ReadMessage(dl.outerRecvBuf[:n], out)
-		// F92: Zero decrypted inner message from buffer immediately after inner reads
+		// Zero decrypted inner message from buffer immediately after inner reads
 		zeroSlice(dl.outerRecvBuf[:n])
 		if readErr != nil {
 			return 0, readErr
@@ -194,7 +192,7 @@ func (dl *DualLayerHandshake) ReadMessage(message, out []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// F97: updateOuterState after read
+	// updateOuterState after read
 	if err := dl.updateOuterState(); err != nil {
 		return 0, err
 	}
@@ -216,7 +214,7 @@ func (dl *DualLayerHandshake) IsFinished() bool {
 }
 
 // IsWriteTurn returns true when it's our turn to send a message.
-// F98: Always check this - two consecutive writes are possible.
+// Always check this - two consecutive writes are possible.
 func (dl *DualLayerHandshake) IsWriteTurn() bool {
 	if dl.outerFinished {
 		if dl.inner == nil {
@@ -231,8 +229,7 @@ func (dl *DualLayerHandshake) IsWriteTurn() bool {
 }
 
 // Finalize extracts the INNER transport state and destroys the outer.
-// F99: finalize() returns inner's transport state. Outer transport destroyed.
-// F117: Guards against double-finalize.
+// Guards against double-finalize.
 func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 	if dl.finalized {
 		return nil, ErrAlreadyFinished
@@ -252,7 +249,7 @@ func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 		dl.outerTransport = nil
 	}
 
-	// F92: Zero receive buffer
+	// Zero receive buffer
 	zeroSlice(dl.outerRecvBuf)
 
 	dl.finalized = true
@@ -260,7 +257,7 @@ func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 }
 
 // GetNextMessageOverhead returns the byte overhead for the next message.
-// F96: go-clatter adds outer transport tag to overhead when inner phase active.
+// When inner phase is active, includes the outer transport tag.
 // This differs from Clatter upstream which may undercount.
 func (dl *DualLayerHandshake) GetNextMessageOverhead() (int, error) {
 	if dl.outerFinished {
@@ -268,7 +265,7 @@ func (dl *DualLayerHandshake) GetNextMessageOverhead() (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		// F96: Add outer transport tag
+		// Add outer transport tag
 		return overhead + TagLen, nil
 	}
 	if dl.outer != nil {
@@ -278,7 +275,7 @@ func (dl *DualLayerHandshake) GetNextMessageOverhead() (int, error) {
 }
 
 // PushPSK is not applicable for dual-layer handshakes.
-// F35: Rust panics, Go returns error.
+// Rust panics on this call; Go returns error.
 func (dl *DualLayerHandshake) PushPSK(_ []byte) error {
 	return fmt.Errorf("%w: PSK not applicable for dual-layer handshakes", ErrInvalidState)
 }
@@ -317,11 +314,12 @@ var _ Handshaker = (*DualLayerHandshake)(nil)
 // Port of Rust Clatter's hybrid_dual_layer.rs.
 //
 // After the outer handshake completes:
-//   MixHash("clatter.hybrid_dual_layer.outer")
-//   MixKeyAndHash(h_outer)
+//
+//	MixHash("clatter.hybrid_dual_layer.outer")
+//	MixKeyAndHash(h_outer)
 //
 // This ensures the inner transport keys contain entropy from both handshakes.
-// F8: Domain separator must be exact bytes.
+// The domain separator must be exact bytes for cross-implementation compatibility.
 type HybridDualLayerHandshake struct {
 	dl DualLayerHandshake // embedded for shared logic
 }
@@ -365,7 +363,7 @@ func (hdl *HybridDualLayerHandshake) updateOuterState() error {
 		hdl.dl.outerTransport = ts
 		hdl.dl.outerFinished = true
 
-		// F8: Mix domain separator and outer hash into inner handshake
+		// Mix domain separator and outer hash into inner handshake
 		// Copy domain to prevent mutation of shared state
 		domain := make([]byte, len(hybridDualLayerDomain))
 		copy(domain, hybridDualLayerDomain)
@@ -387,13 +385,13 @@ func (hdl *HybridDualLayerHandshake) updateOuterState() error {
 }
 
 // WriteMessage writes the next handshake message.
-// F163: MaxMessageLen checked at this layer.
+// MaxMessageLen checked at this layer.
 func (hdl *HybridDualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if hdl.dl.finalized {
 		return 0, ErrAlreadyFinished
 	}
 	if hdl.dl.outerFinished {
-		// F163: Check total output won't exceed MaxMessageLen
+		// Check total output won't exceed MaxMessageLen
 		overhead, err := hdl.GetNextMessageOverhead()
 		if err != nil {
 			return 0, err
@@ -434,7 +432,7 @@ func (hdl *HybridDualLayerHandshake) ReadMessage(message, out []byte) (int, erro
 			return 0, err
 		}
 		payloadN, readErr := hdl.dl.inner.ReadMessage(hdl.dl.outerRecvBuf[:n], out)
-		// F92: Zero decrypted inner message from buffer immediately
+		// Zero decrypted inner message from buffer immediately
 		zeroSlice(hdl.dl.outerRecvBuf[:n])
 		if readErr != nil {
 			return 0, readErr
