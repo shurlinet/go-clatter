@@ -170,7 +170,7 @@ func TestHandshakeInternals_StatusToggle(t *testing.T) {
 	}
 }
 
-// TestHandshakeInternals_SetError verifies F63/F164.
+// TestHandshakeInternals_SetError verifies F63/F164: state zeroed, pointers nil'd.
 func TestHandshakeInternals_SetError(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_protocol")
 	kp := NewKeyPair([]byte{1, 2, 3}, []byte{4, 5, 6})
@@ -183,6 +183,15 @@ func TestHandshakeInternals_SetError(t *testing.T) {
 	h.setError(ErrCipher)
 	if h.status != StatusError {
 		t.Error("status should be Error after setError")
+	}
+	if h.symmetricState != nil {
+		t.Error("symmetricState should be nil after setError")
+	}
+	if h.s != nil {
+		t.Error("s should be nil after setError")
+	}
+	if hash := h.GetHandshakeHash(); hash != nil {
+		t.Error("GetHandshakeHash should return nil after setError")
 	}
 }
 
