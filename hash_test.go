@@ -47,18 +47,46 @@ type testHMACWriter struct {
 func (h *testHMACWriter) Write(p []byte) (int, error) { return h.mac.Write(p) }
 func (h *testHMACWriter) Sum() []byte                  { return h.mac.Sum(nil) }
 
+// helper: must succeed
+func mustHmacHash(t *testing.T, h HashFunc, key []byte, data ...[]byte) []byte {
+	t.Helper()
+	result, err := hmacHash(h, key, data...)
+	if err != nil {
+		t.Fatalf("hmacHash failed: %v", err)
+	}
+	return result
+}
+
+func mustHKDF2(t *testing.T, h HashFunc, ck, ikm []byte) ([]byte, []byte) {
+	t.Helper()
+	o1, o2, err := HKDF2(h, ck, ikm)
+	if err != nil {
+		t.Fatalf("HKDF2 failed: %v", err)
+	}
+	return o1, o2
+}
+
+func mustHKDF3(t *testing.T, h HashFunc, ck, ikm []byte) ([]byte, []byte, []byte) {
+	t.Helper()
+	o1, o2, o3, err := HKDF3(h, ck, ikm)
+	if err != nil {
+		t.Fatalf("HKDF3 failed: %v", err)
+	}
+	return o1, o2, o3
+}
+
 // F107: Counter bytes 0x01 vs ASCII "1" produce different HKDF output.
 func TestHKDF2_CounterBytesNotASCII(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0xaa}, 32)
 	ikm := []byte("test key material")
 
-	out1, out2 := HKDF2(h, ck, ikm)
+	out1, out2 := mustHKDF2(t, h, ck, ikm)
 
 	// Compute what we'd get with ASCII "1" and "2" instead
-	tempKey := hmacHash(h, ck, ikm)
-	wrongOut1 := hmacHash(h, tempKey, []byte("1"))  // ASCII 0x31
-	wrongOut2 := hmacHash(h, tempKey, wrongOut1, []byte("2")) // ASCII 0x32
+	tempKey := mustHmacHash(t, h, ck, ikm)
+	wrongOut1 := mustHmacHash(t, h, tempKey, []byte("1"))             // ASCII 0x31
+	wrongOut2 := mustHmacHash(t, h, tempKey, wrongOut1, []byte("2"))  // ASCII 0x32
 
 	if bytes.Equal(out1, wrongOut1) {
 		t.Fatal("HKDF output1 matches ASCII counter - should use raw 0x01")
@@ -74,12 +102,12 @@ func TestHKDF2_MatchesNoiseSpec(t *testing.T) {
 	ck := bytes.Repeat([]byte{0x01}, 32)
 	ikm := []byte("input key material")
 
-	out1, out2 := HKDF2(h, ck, ikm)
+	out1, out2 := mustHKDF2(t, h, ck, ikm)
 
 	// Manually compute expected values using raw HMAC
-	tempKey := hmacHash(h, ck, ikm)
-	expectedOut1 := hmacHash(h, tempKey, []byte{0x01})
-	expectedOut2 := hmacHash(h, tempKey, expectedOut1, []byte{0x02})
+	tempKey := mustHmacHash(t, h, ck, ikm)
+	expectedOut1 := mustHmacHash(t, h, tempKey, []byte{0x01})
+	expectedOut2 := mustHmacHash(t, h, tempKey, expectedOut1, []byte{0x02})
 
 	if !bytes.Equal(out1, expectedOut1) {
 		t.Fatalf("HKDF2 out1 mismatch:\n  got:  %s\n  want: %s",
@@ -96,12 +124,11 @@ func TestHKDF2_EmptyIKM(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x42}, 32)
 
-	out1, out2 := HKDF2(h, ck, []byte{})
+	out1, out2 := mustHKDF2(t, h, ck, []byte{})
 
 	if len(out1) != 32 || len(out2) != 32 {
 		t.Fatalf("empty IKM: expected 32-byte outputs, got %d and %d", len(out1), len(out2))
 	}
-	// Must not be all zeros
 	allZero := true
 	for _, b := range out1 {
 		if b != 0 {
@@ -119,8 +146,8 @@ func TestHKDF2_NilIKM(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x42}, 32)
 
-	out1Empty, out2Empty := HKDF2(h, ck, []byte{})
-	out1Nil, out2Nil := HKDF2(h, ck, nil)
+	out1Empty, out2Empty := mustHKDF2(t, h, ck, []byte{})
+	out1Nil, out2Nil := mustHKDF2(t, h, ck, nil)
 
 	if !bytes.Equal(out1Empty, out1Nil) || !bytes.Equal(out2Empty, out2Nil) {
 		t.Fatal("nil IKM should equal empty IKM")
@@ -133,13 +160,13 @@ func TestHKDF3_ThreeOutputs(t *testing.T) {
 	ck := bytes.Repeat([]byte{0xcc}, 32)
 	ikm := []byte("three outputs")
 
-	out1, out2, out3 := HKDF3(h, ck, ikm)
+	out1, out2, out3 := mustHKDF3(t, h, ck, ikm)
 
 	// Manual verification
-	tempKey := hmacHash(h, ck, ikm)
-	expectedOut1 := hmacHash(h, tempKey, []byte{0x01})
-	expectedOut2 := hmacHash(h, tempKey, expectedOut1, []byte{0x02})
-	expectedOut3 := hmacHash(h, tempKey, expectedOut2, []byte{0x03})
+	tempKey := mustHmacHash(t, h, ck, ikm)
+	expectedOut1 := mustHmacHash(t, h, tempKey, []byte{0x01})
+	expectedOut2 := mustHmacHash(t, h, tempKey, expectedOut1, []byte{0x02})
+	expectedOut3 := mustHmacHash(t, h, tempKey, expectedOut2, []byte{0x03})
 
 	if !bytes.Equal(out1, expectedOut1) {
 		t.Fatal("HKDF3 out1 mismatch")
@@ -160,7 +187,7 @@ func TestHKDF2_CKNotCorrupted(t *testing.T) {
 	copy(ckCopy, ck)
 	ikm := []byte("test")
 
-	HKDF2(h, ck, ikm)
+	mustHKDF2(t, h, ck, ikm)
 
 	if !bytes.Equal(ck, ckCopy) {
 		t.Fatal("HKDF2 corrupted the ck input")
@@ -173,7 +200,7 @@ func TestHKDF2_SHA512_OutputLength(t *testing.T) {
 	ck := bytes.Repeat([]byte{0xee}, 64)
 	ikm := []byte("sha512 test")
 
-	out1, out2 := HKDF2(h, ck, ikm)
+	out1, out2 := mustHKDF2(t, h, ck, ikm)
 
 	if len(out1) != 64 {
 		t.Fatalf("SHA-512 HKDF2 out1 length: got %d, want 64", len(out1))
@@ -183,19 +210,53 @@ func TestHKDF2_SHA512_OutputLength(t *testing.T) {
 	}
 }
 
-// F110: Verify temp keys are zeroed (we can't directly test defer, but we can
-// verify that calling HKDF2 twice with same inputs produces same outputs,
-// confirming no state leakage).
+// F110: Deterministic - no state leakage from zeroing.
 func TestHKDF2_Deterministic(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x11}, 32)
 	ikm := []byte("deterministic")
 
-	a1, a2 := HKDF2(h, ck, ikm)
-	b1, b2 := HKDF2(h, ck, ikm)
+	a1, a2 := mustHKDF2(t, h, ck, ikm)
+	b1, b2 := mustHKDF2(t, h, ck, ikm)
 
 	if !bytes.Equal(a1, b1) || !bytes.Equal(a2, b2) {
 		t.Fatal("HKDF2 not deterministic")
+	}
+}
+
+// F56: HMAC key exceeding block length returns error.
+func TestHmacHash_KeyTooLong(t *testing.T) {
+	h := &testSha256{} // blockLen=64
+	longKey := bytes.Repeat([]byte{0xff}, 65) // 1 byte over
+
+	_, err := hmacHash(h, longKey, []byte("data"))
+	if err == nil {
+		t.Fatal("expected error for HMAC key exceeding block length")
+	}
+}
+
+// F56: HMAC key at exactly block length succeeds.
+func TestHmacHash_KeyExactBlockLen(t *testing.T) {
+	h := &testSha256{}
+	key := bytes.Repeat([]byte{0xaa}, 64) // exactly blockLen
+
+	result, err := hmacHash(h, key, []byte("data"))
+	if err != nil {
+		t.Fatalf("key at block length should succeed: %v", err)
+	}
+	if len(result) != 32 {
+		t.Fatal("wrong output length")
+	}
+}
+
+// F56: HKDF2 propagates HMAC key length error.
+func TestHKDF2_KeyTooLong(t *testing.T) {
+	h := &testSha256{}
+	longCk := bytes.Repeat([]byte{0xff}, 65) // exceeds blockLen=64
+
+	_, _, err := HKDF2(h, longCk, []byte("ikm"))
+	if err == nil {
+		t.Fatal("HKDF2 should fail with oversized ck")
 	}
 }
 

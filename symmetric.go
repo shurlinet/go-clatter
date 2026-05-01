@@ -95,8 +95,11 @@ func (ss *SymmetricState) MixKey(ikm []byte) error {
 	ckCopy := make([]byte, ss.hashLen)
 	copy(ckCopy, ss.ck[:ss.hashLen])
 
-	newCk, tempK := HKDF2(ss.hash, ckCopy, ikm)
-	defer zeroSlice(ckCopy)
+	newCk, tempK, err := HKDF2(ss.hash, ckCopy, ikm)
+	zeroSlice(ckCopy)
+	if err != nil {
+		return fmt.Errorf("MixKey: %w", err)
+	}
 
 	// Update ck
 	copy(ss.ck[:], newCk[:ss.hashLen])
@@ -113,7 +116,6 @@ func (ss *SymmetricState) MixKey(ikm []byte) error {
 		ss.cs.Destroy()
 	}
 
-	var err error
 	ss.cs, err = NewCipherState(ss.cipher, tempK)
 	zeroSlice(tempK)
 	if err != nil {
@@ -135,8 +137,11 @@ func (ss *SymmetricState) MixKeyAndHash(ikm []byte) error {
 	ckCopy := make([]byte, ss.hashLen)
 	copy(ckCopy, ss.ck[:ss.hashLen])
 
-	newCk, tempH, tempK := HKDF3(ss.hash, ckCopy, ikm)
-	defer zeroSlice(ckCopy)
+	newCk, tempH, tempK, err := HKDF3(ss.hash, ckCopy, ikm)
+	zeroSlice(ckCopy)
+	if err != nil {
+		return fmt.Errorf("MixKeyAndHash: %w", err)
+	}
 
 	// Update ck
 	copy(ss.ck[:], newCk[:ss.hashLen])
@@ -157,7 +162,6 @@ func (ss *SymmetricState) MixKeyAndHash(ikm []byte) error {
 		ss.cs.Destroy()
 	}
 
-	var err error
 	ss.cs, err = NewCipherState(ss.cipher, tempK)
 	zeroSlice(tempK)
 	if err != nil {
@@ -263,8 +267,11 @@ func (ss *SymmetricState) Split() (cs1, cs2 *CipherState, err error) {
 	copy(ckCopy, ss.ck[:ss.hashLen])
 
 	// F108: Empty IKM
-	tempK1, tempK2 := HKDF2(ss.hash, ckCopy, nil)
+	tempK1, tempK2, hkdfErr := HKDF2(ss.hash, ckCopy, nil)
 	zeroSlice(ckCopy)
+	if hkdfErr != nil {
+		return nil, nil, fmt.Errorf("Split: %w", hkdfErr)
+	}
 
 	// F30: Truncate to KeyLen
 	if len(tempK1) > KeyLen {
