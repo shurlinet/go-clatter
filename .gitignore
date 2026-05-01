@@ -11,9 +11,10 @@
 # Go build cache
 *.out
 
-# IDE
+# IDE / tools
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
