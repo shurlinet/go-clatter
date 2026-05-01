@@ -5,11 +5,11 @@ import (
 )
 
 // TestAllPatternsCount verifies predefined pattern count.
-// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=26 (12 base + 14 PSK) + Hybrid=30 (12 base + 18 PSK) = 92.
+// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=26 (12 base + 14 PSK) + Hybrid=28 (12 base + 16 PSK) = 90.
 func TestAllPatternsCount(t *testing.T) {
 	patterns := AllPatterns()
-	if len(patterns) != 92 {
-		t.Fatalf("expected 92 patterns, got %d", len(patterns))
+	if len(patterns) != 90 {
+		t.Fatalf("expected 90 patterns, got %d", len(patterns))
 	}
 }
 
@@ -412,12 +412,12 @@ func TestAllPatternsUniqueName(t *testing.T) {
 	}
 }
 
-// TestFirstTokenIsE verifies NQ/Hybrid patterns start with Token E (Noise convention).
-// PQ patterns can start with Skem or Ekem (different token structure).
+// TestFirstTokenIsE verifies NQ patterns start with Token E (Noise convention).
+// PQ and Hybrid patterns have different first-token rules (Skem/Ekem can be first).
 func TestFirstTokenIsE(t *testing.T) {
 	for _, p := range AllPatterns() {
-		if p.Type() == PatternTypeKEM {
-			continue // PQ patterns have different first-token rules
+		if p.Type() == PatternTypeKEM || p.Type() == PatternTypeHybrid {
+			continue // PQ/Hybrid patterns can start with Skem/Ekem
 		}
 
 		msg0 := p.InitiatorMessage(0)

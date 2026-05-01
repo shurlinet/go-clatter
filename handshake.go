@@ -335,10 +335,12 @@ type CipherSuite struct {
 type Option func(*handshakeOptions)
 
 type handshakeOptions struct {
-	staticKey    *KeyPair
-	remoteStatic []byte
-	prologue     []byte
-	rng          RNG
+	staticKey       *KeyPair
+	remoteStatic    []byte
+	staticKEM       *KeyPair // Hybrid: local static KEM keypair
+	remoteStaticKEM []byte   // Hybrid: remote static KEM public key
+	prologue        []byte
+	rng             RNG
 }
 
 // WithStaticKey sets the local static keypair for the handshake.
@@ -370,6 +372,24 @@ func WithPrologue(data []byte) Option {
 func WithRNG(rng RNG) Option {
 	return func(o *handshakeOptions) {
 		o.rng = rng
+	}
+}
+
+// WithStaticKEMKey sets the local static KEM keypair (Hybrid handshakes only).
+// Required for patterns with pre-message S (KK, IK).
+func WithStaticKEMKey(kp KeyPair) Option {
+	return func(o *handshakeOptions) {
+		clone := kp.Clone()
+		o.staticKEM = &clone
+	}
+}
+
+// WithRemoteStaticKEMKey sets the remote static KEM public key (Hybrid handshakes only).
+// Required for patterns with pre-message S (NK, KK, XK, IK).
+func WithRemoteStaticKEMKey(pub []byte) Option {
+	return func(o *handshakeOptions) {
+		o.remoteStaticKEM = make([]byte, len(pub))
+		copy(o.remoteStaticKEM, pub)
 	}
 }
 

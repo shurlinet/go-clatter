@@ -762,174 +762,189 @@ var (
 // Hybrid (DH+KEM) Patterns
 // F139: No one-way hybrid patterns. Hybrid starts at NN.
 //
-// WARNING: These pattern definitions need correction when handshake_hybrid.go
-// is implemented. The same class of bug that affected PQ patterns exists here:
-// Ekem/Skem tokens are NOT grouped with E in the same message. They appear in
-// the OPPOSING party's response. See Clatter src/handshakepattern.rs for the
-// correct definitions. Correcting them now is deferred to Batch 4 hybrid work
-// to avoid breaking pattern type detection without the corresponding handshake.
+// Corrected from Clatter src/handshakepattern.rs (Batch 4, 2026-05-01).
+// Ekem/Skem tokens appear in the OPPOSING party's message, not grouped with E.
 // ============================================================================
 
 var (
+	// hybridNN: -> e, <- ekem, e, ee
 	PatternHybridNN = mustNewPattern("hybridNN",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}},
 		nil, nil, false)
 
+	// hybridNK: <- s, ..., -> skem, e, es, <- ekem, e, ee
 	PatternHybridNK = mustNewPattern("hybridNK",
-		[][]Token{{TokenE, TokenES, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenSkem, TokenE, TokenES}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}},
 		nil, []Token{TokenS}, false)
 
+	// hybridNX: -> e, <- ekem, e, ee, s, es, -> skem
 	PatternHybridNX = mustNewPattern("hybridNX",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem, TokenS, TokenES, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenE, TokenEE, TokenS, TokenES}},
 		nil, nil, false)
 
+	// hybridKN: -> s, ..., -> e, <- ekem, skem, e, ee, se
 	PatternHybridKN = mustNewPattern("hybridKN",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		[]Token{TokenS}, nil, false)
 
+	// hybridKK: -> s, <- s, ..., -> skem, e, es, ss, <- ekem, skem, e, ee, se
 	PatternHybridKK = mustNewPattern("hybridKK",
-		[][]Token{{TokenE, TokenES, TokenSS, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenSkem, TokenE, TokenES, TokenSS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		[]Token{TokenS}, []Token{TokenS}, false)
 
+	// hybridKX: -> s, ..., -> e, <- ekem, skem, e, ee, se, s, es, -> skem
 	PatternHybridKX = mustNewPattern("hybridKX",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenS, TokenES, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenS, TokenES}},
 		[]Token{TokenS}, nil, false)
 
+	// hybridXN: -> e, <- ekem, e, ee, -> s, se, <- skem
 	PatternHybridXN = mustNewPattern("hybridXN",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSE, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenE}, {TokenS, TokenSE}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}, {TokenSkem}},
 		nil, nil, false)
 
+	// hybridXK: <- s, ..., -> skem, e, es, <- ekem, e, ee, -> s, se, <- skem
 	PatternHybridXK = mustNewPattern("hybridXK",
-		[][]Token{{TokenE, TokenES, TokenEkem, TokenSkem}, {TokenS, TokenSE, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenSkem, TokenE, TokenES}, {TokenS, TokenSE}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}, {TokenSkem}},
 		nil, []Token{TokenS}, false)
 
+	// hybridXX: -> e, <- ekem, e, ee, s, es, -> skem, s, se, <- skem
 	PatternHybridXX = mustNewPattern("hybridXX",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSE, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem, TokenS, TokenES, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem, TokenS, TokenSE}},
+		[][]Token{{TokenEkem, TokenE, TokenEE, TokenS, TokenES}, {TokenSkem}},
 		nil, nil, false)
 
+	// hybridIN: -> e, s, <- ekem, skem, e, ee, se
 	PatternHybridIN = mustNewPattern("hybridIN",
-		[][]Token{{TokenE, TokenS, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenE, TokenS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		nil, nil, false)
 
+	// hybridIK: <- s, ..., -> skem, e, es, s, ss, <- ekem, skem, e, ee, se
 	PatternHybridIK = mustNewPattern("hybridIK",
-		[][]Token{{TokenE, TokenES, TokenS, TokenSS, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenSkem, TokenE, TokenES, TokenS, TokenSS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		nil, []Token{TokenS}, false)
 
+	// hybridIX: -> e, s, <- ekem, skem, e, ee, se, s, es, -> skem
 	PatternHybridIX = mustNewPattern("hybridIX",
-		[][]Token{{TokenE, TokenS, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenS, TokenES, TokenSkem}},
+		[][]Token{{TokenE, TokenS}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenS, TokenES}},
 		nil, nil, false)
 )
 
 // ============================================================================
 // Hybrid PSK Patterns
+// Derived from Clatter add_psks() on corrected base patterns.
 // ============================================================================
 
 var (
+	// hybridNNpsk0: -> psk, e, <- ekem, e, ee
 	PatternHybridNNpsk0 = mustNewPattern("hybridNNpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenPsk, TokenE}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}},
 		nil, nil, false)
 
+	// hybridNNpsk2: -> e, <- ekem, e, ee, psk
 	PatternHybridNNpsk2 = mustNewPattern("hybridNNpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem, TokenPsk}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenE, TokenEE, TokenPsk}},
 		nil, nil, false)
 
-	PatternHybridNKpsk0 = mustNewPattern("hybridNKpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenES, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
-		nil, []Token{TokenS}, false)
-
+	// hybridNKpsk2: <- s, ..., -> skem, e, es, <- ekem, e, ee, psk
 	PatternHybridNKpsk2 = mustNewPattern("hybridNKpsk2",
-		[][]Token{{TokenE, TokenES, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem, TokenPsk}},
+		[][]Token{{TokenSkem, TokenE, TokenES}},
+		[][]Token{{TokenEkem, TokenE, TokenEE, TokenPsk}},
 		nil, []Token{TokenS}, false)
 
+	// hybridNXpsk2: -> e, <- ekem, e, ee, s, es, psk, -> skem
 	PatternHybridNXpsk2 = mustNewPattern("hybridNXpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenEkem, TokenS, TokenES, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenE, TokenEE, TokenS, TokenES, TokenPsk}},
 		nil, nil, false)
 
+	// hybridKNpsk0: -> s, ..., -> psk, e, <- ekem, skem, e, ee, se
 	PatternHybridKNpsk0 = mustNewPattern("hybridKNpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenPsk, TokenE}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		[]Token{TokenS}, nil, false)
 
+	// hybridKNpsk2: -> s, ..., -> e, <- ekem, skem, e, ee, se, psk
 	PatternHybridKNpsk2 = mustNewPattern("hybridKNpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenPsk}},
 		[]Token{TokenS}, nil, false)
 
-	PatternHybridKKpsk0 = mustNewPattern("hybridKKpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenES, TokenSS, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
-		[]Token{TokenS}, []Token{TokenS}, false)
-
+	// hybridKKpsk2: -> s, <- s, ..., -> skem, e, es, ss, <- ekem, skem, e, ee, se, psk
 	PatternHybridKKpsk2 = mustNewPattern("hybridKKpsk2",
-		[][]Token{{TokenE, TokenES, TokenSS, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenPsk}},
+		[][]Token{{TokenSkem, TokenE, TokenES, TokenSS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenPsk}},
 		[]Token{TokenS}, []Token{TokenS}, false)
 
+	// hybridKXpsk2: -> s, ..., -> e, <- ekem, skem, e, ee, se, s, es, psk, -> skem
 	PatternHybridKXpsk2 = mustNewPattern("hybridKXpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenS, TokenES, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenS, TokenES, TokenPsk}},
 		[]Token{TokenS}, nil, false)
 
+	// hybridXNpsk3: -> e, <- ekem, e, ee, -> s, se, psk, <- skem
 	PatternHybridXNpsk3 = mustNewPattern("hybridXNpsk3",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSE, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenE}, {TokenS, TokenSE, TokenPsk}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}, {TokenSkem}},
 		nil, nil, false)
 
+	// hybridXKpsk3: <- s, ..., -> skem, e, es, <- ekem, e, ee, -> s, se, psk, <- skem
 	PatternHybridXKpsk3 = mustNewPattern("hybridXKpsk3",
-		[][]Token{{TokenE, TokenES, TokenEkem, TokenSkem}, {TokenS, TokenSE, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEE, TokenEkem}},
+		[][]Token{{TokenSkem, TokenE, TokenES}, {TokenS, TokenSE, TokenPsk}},
+		[][]Token{{TokenEkem, TokenE, TokenEE}, {TokenSkem}},
 		nil, []Token{TokenS}, false)
 
+	// hybridXXpsk3: -> e, <- ekem, e, ee, s, es, -> skem, s, se, psk, <- skem
 	PatternHybridXXpsk3 = mustNewPattern("hybridXXpsk3",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSE, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEE, TokenEkem, TokenS, TokenES, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem, TokenS, TokenSE, TokenPsk}},
+		[][]Token{{TokenEkem, TokenE, TokenEE, TokenS, TokenES}, {TokenSkem}},
 		nil, nil, false)
 
+	// hybridINpsk1: -> e, s, psk, <- ekem, skem, e, ee, se
 	PatternHybridINpsk1 = mustNewPattern("hybridINpsk1",
-		[][]Token{{TokenE, TokenS, TokenEkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenE, TokenS, TokenPsk}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		nil, nil, false)
 
+	// hybridINpsk2: -> e, s, <- ekem, skem, e, ee, se, psk
 	PatternHybridINpsk2 = mustNewPattern("hybridINpsk2",
-		[][]Token{{TokenE, TokenS, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE, TokenS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenPsk}},
 		nil, nil, false)
 
+	// hybridIKpsk1: <- s, ..., -> skem, e, es, s, ss, psk, <- ekem, skem, e, ee, se
 	PatternHybridIKpsk1 = mustNewPattern("hybridIKpsk1",
-		[][]Token{{TokenE, TokenES, TokenS, TokenSS, TokenEkem, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenSkem, TokenE, TokenES, TokenS, TokenSS, TokenPsk}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE}},
 		nil, []Token{TokenS}, false)
 
+	// hybridIKpsk2: <- s, ..., -> skem, e, es, s, ss, <- ekem, skem, e, ee, se, psk
 	PatternHybridIKpsk2 = mustNewPattern("hybridIKpsk2",
-		[][]Token{{TokenE, TokenES, TokenS, TokenSS, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenPsk}},
+		[][]Token{{TokenSkem, TokenE, TokenES, TokenS, TokenSS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenPsk}},
 		nil, []Token{TokenS}, false)
 
+	// hybridIXpsk2: -> e, s, <- ekem, skem, e, ee, se, s, es, psk, -> skem
 	PatternHybridIXpsk2 = mustNewPattern("hybridIXpsk2",
-		[][]Token{{TokenE, TokenS, TokenEkem}},
-		[][]Token{{TokenE, TokenEE, TokenSE, TokenEkem, TokenSkem, TokenS, TokenES, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE, TokenS}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenE, TokenEE, TokenSE, TokenS, TokenES, TokenPsk}},
 		nil, nil, false)
 )
 
-// AllPatterns returns all 92 predefined patterns for enumeration/testing.
-// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=26 (12 base + 14 PSK) + Hybrid=30 (12 base + 18 PSK) = 92.
+// AllPatterns returns all 90 predefined patterns for enumeration/testing.
+// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=26 (12 base + 14 PSK) + Hybrid=28 (12 base + 16 PSK) = 90.
 func AllPatterns() []*HandshakePattern {
 	return []*HandshakePattern{
 		// NQ one-way (3)
@@ -972,12 +987,12 @@ func AllPatterns() []*HandshakePattern {
 		PatternHybridKN, PatternHybridKK, PatternHybridKX,
 		PatternHybridXN, PatternHybridXK, PatternHybridXX,
 		PatternHybridIN, PatternHybridIK, PatternHybridIX,
-		// Hybrid PSK (18)
+		// Hybrid PSK (16)
 		PatternHybridNNpsk0, PatternHybridNNpsk2,
-		PatternHybridNKpsk0, PatternHybridNKpsk2,
+		PatternHybridNKpsk2,
 		PatternHybridNXpsk2,
 		PatternHybridKNpsk0, PatternHybridKNpsk2,
-		PatternHybridKKpsk0, PatternHybridKKpsk2,
+		PatternHybridKKpsk2,
 		PatternHybridKXpsk2,
 		PatternHybridXNpsk3, PatternHybridXKpsk3, PatternHybridXXpsk3,
 		PatternHybridINpsk1, PatternHybridINpsk2,

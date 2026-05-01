@@ -702,6 +702,9 @@ func (hs *PqHandshake) writeTokenSkem(out []byte) (int, error) {
 
 	// F43: Skem ciphertext is encrypted via EncryptAndHash
 	encCt, err := hs.symmetricState.EncryptAndHash(ct)
+	// F85: Zero plaintext KEM ciphertext after encryption - it's the raw
+	// KEM output that would enable decapsulation if leaked from memory.
+	zeroSlice(ct)
 	if err != nil {
 		return 0, err
 	}
