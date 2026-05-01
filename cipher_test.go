@@ -178,9 +178,10 @@ func TestCipherState_NonceOverflowDecrypt(t *testing.T) {
 	}
 }
 
-// F29: Destroy zeros the key.
+// Destroy zeros ALL fields (key, nonce, cipher ref).
 func TestCipherState_Destroy(t *testing.T) {
 	cs := newTestCipherState(t)
+	cs.setNonce(42)
 	cs.Destroy()
 
 	if !cs.IsDestroyed() {
@@ -193,6 +194,15 @@ func TestCipherState_Destroy(t *testing.T) {
 	}
 	if cs.hasKey {
 		t.Fatal("hasKey should be false after Destroy")
+	}
+	if cs.nonce != 0 {
+		t.Fatal("nonce should be zeroed after Destroy")
+	}
+	if cs.overflowed {
+		t.Fatal("overflowed should be false after Destroy")
+	}
+	if cs.cipher != nil {
+		t.Fatal("cipher should be nil after Destroy")
 	}
 }
 

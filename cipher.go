@@ -38,6 +38,10 @@ func NewCipherState(c Cipher, key []byte) (*CipherState, error) {
 		cipher: c,
 	}
 	copy(cs.key[:], key)
+	// Caller is responsible for zeroing key after this call.
+	// NewCipherState does NOT zero the source: Split() passes the same
+	// slice to two NewCipherState calls, and defensive zeroing here would
+	// give the second CipherState a zero key.
 	return cs, nil
 }
 
@@ -162,8 +166,9 @@ func (cs *CipherState) Nonce() uint64 {
 	return cs.nonce
 }
 
-// Destroy zeros the key and marks the CipherState as destroyed.
+// Destroy zeros ALL fields and marks the CipherState as destroyed.
 // F29: Called by SymmetricState.mixKey before replacing the old CipherState.
+// Zeros key, nonce (usage count is metadata), and nils cipher reference.
 func (cs *CipherState) Destroy() {
 	if cs == nil {
 		return
@@ -171,7 +176,10 @@ func (cs *CipherState) Destroy() {
 	for i := range cs.key {
 		cs.key[i] = 0
 	}
+	cs.nonce = 0
 	cs.hasKey = false
+	cs.overflowed = false
+	cs.cipher = nil
 	cs.destroyed = true
 }
 

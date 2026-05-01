@@ -52,6 +52,7 @@ func InitializeSymmetric(h HashFunc, c Cipher, protocolName string) *SymmetricSt
 		// F119: Hash the protocol name
 		hashed := h.Hash(nameBytes)
 		copy(ss.h[:], hashed)
+		zeroSlice(hashed)
 	}
 
 	// F120: ck = h. Array assignment copies bytes, no aliasing.
@@ -302,6 +303,7 @@ func (ss *SymmetricState) GetHandshakeHash() []byte {
 }
 
 // ChainingKey returns a copy of the current chaining key ck.
+// The caller MUST zero the returned slice when done - ck is secret keying material.
 func (ss *SymmetricState) ChainingKey() []byte {
 	out := make([]byte, ss.hashLen)
 	copy(out, ss.ck[:ss.hashLen])
