@@ -101,13 +101,13 @@ func TestMlKem768_InvalidSecretKey(t *testing.T) {
 }
 
 func TestMlKem768_Name(t *testing.T) {
-	if NewMlKem768().Name() != "MlKem768" {
+	if NewMlKem768().Name() != "MLKEM768" {
 		t.Fatal("wrong name")
 	}
 }
 
 func TestMlKem1024_Name(t *testing.T) {
-	if NewMlKem1024().Name() != "MlKem1024" {
+	if NewMlKem1024().Name() != "MLKEM1024" {
 		t.Fatal("wrong name")
 	}
 }

@@ -16,7 +16,7 @@ type MlKem1024 struct {
 func NewMlKem1024() *MlKem1024        { return &MlKem1024{testing: false} }
 func NewMlKem1024Testing() *MlKem1024 { return &MlKem1024{testing: true} }
 
-func (k *MlKem1024) Name() string        { return "MlKem1024" }
+func (k *MlKem1024) Name() string        { return "MLKEM1024" }
 func (k *MlKem1024) PubKeyLen() int      { return mlkem.EncapsulationKeySize1024 }
 func (k *MlKem1024) SecretKeyLen() int    { return 64 }
 func (k *MlKem1024) CiphertextLen() int   { return mlkem.CiphertextSize1024 }

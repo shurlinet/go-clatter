@@ -4,12 +4,12 @@ import (
 	"testing"
 )
 
-// TestAllPatternsCount verifies we have exactly 91 predefined patterns.
-// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=25 (12 base + 13 PSK) + Hybrid=30 (12 base + 18 PSK) = 91.
+// TestAllPatternsCount verifies predefined pattern count.
+// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=26 (12 base + 14 PSK) + Hybrid=30 (12 base + 18 PSK) = 92.
 func TestAllPatternsCount(t *testing.T) {
 	patterns := AllPatterns()
-	if len(patterns) != 91 {
-		t.Fatalf("expected 91 patterns, got %d", len(patterns))
+	if len(patterns) != 92 {
+		t.Fatalf("expected 92 patterns, got %d", len(patterns))
 	}
 }
 
@@ -39,7 +39,7 @@ func TestPatternTypeDetection(t *testing.T) {
 		{"pqNN", PatternPqNN, PatternTypeKEM},
 		{"pqXX", PatternPqXX, PatternTypeKEM},
 		{"pqIK", PatternPqIK, PatternTypeKEM},
-		{"pqNNpsk0", PatternPqNNpsk0, PatternTypeKEM},
+		{"pqNNpsk2", PatternPqNNpsk2, PatternTypeKEM},
 		// Hybrid
 		{"hybridNN", PatternHybridNN, PatternTypeHybrid},
 		{"hybridXX", PatternHybridXX, PatternTypeHybrid},
@@ -74,7 +74,7 @@ func TestPSKDetection(t *testing.T) {
 	// PSK patterns
 	hasPSK := []*HandshakePattern{
 		PatternNNpsk0, PatternNNpsk2, PatternXXpsk3,
-		PatternPqNNpsk0, PatternPqNNpsk2,
+		PatternPqNNpsk2,
 		PatternHybridNNpsk0, PatternHybridXXpsk3,
 		PatternNpsk0, PatternKpsk0, PatternXpsk1,
 	}
@@ -252,13 +252,14 @@ func TestInvalidPattern_EkemAfterSkem(t *testing.T) {
 	}
 }
 
-// TestInvalidPattern_SkemWithoutPubKey verifies Skem needs prior E or S.
-func TestInvalidPattern_SkemWithoutPubKey(t *testing.T) {
-	_, err := NewPattern("bad",
+// TestInvalidPattern_SkemAlone verifies Skem alone in a message is valid in PQ patterns.
+// PQ patterns have Skem without prior E/S in the same message (key comes from prior message).
+func TestInvalidPattern_SkemAlone(t *testing.T) {
+	_, err := NewPattern("pqTest",
 		[][]Token{{TokenSkem}},
 		nil, nil, nil, false)
-	if err == nil {
-		t.Fatal("expected error for Skem without prior E or S")
+	if err != nil {
+		t.Fatalf("Skem alone in a message should be valid for PQ patterns: %v", err)
 	}
 }
 
@@ -411,10 +412,14 @@ func TestAllPatternsUniqueName(t *testing.T) {
 	}
 }
 
-// TestFirstTokenIsE verifies every message pattern starts with Token E (Noise convention).
+// TestFirstTokenIsE verifies NQ/Hybrid patterns start with Token E (Noise convention).
+// PQ patterns can start with Skem or Ekem (different token structure).
 func TestFirstTokenIsE(t *testing.T) {
 	for _, p := range AllPatterns() {
-		// First initiator message must start with E (all patterns)
+		if p.Type() == PatternTypeKEM {
+			continue // PQ patterns have different first-token rules
+		}
+
 		msg0 := p.InitiatorMessage(0)
 		if len(msg0) == 0 {
 			continue

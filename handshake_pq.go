@@ -6,43 +6,51 @@ import (
 )
 
 // Compile-time interface compliance check.
-var _ Handshaker = (*NqHandshake)(nil)
+var _ Handshaker = (*PqHandshake)(nil)
 
-// NqHandshake implements the classical (non-quantum) Noise handshake.
-// Port of Rust Clatter's nq.rs. Uses DH-only tokens (E, S, EE, ES, SE, SS, PSK).
+// PqHandshake implements the PQ (KEM-only) Noise handshake.
+// Port of Rust Clatter's pq.rs. Uses KEM-only tokens (E, S, Ekem, Skem, PSK).
+// No DH operations. All key exchange via KEM encapsulate/decapsulate.
 //
 // Finding coverage:
-// F11/F79:  buildName produces exact protocol string matching Clatter
-// F12:      Ephemeral keys generated INSIDE WriteMessage, never from constructor
-// F36:      acquireUse/releaseUse atomic guard against concurrent access
-// F57:      ownRandApplied tracked for PSK validity
-// F62:      Sticky error state, no recovery
-// F138:     PSK validity check on write-side only (Token::S write)
-// F151:     Payload encrypt/decrypt always LAST after all tokens
-// F152:     Pre-message Token::E has different mix logic than message-body Token::E
-// F162:     Destroy() zeros ALL fields
-// F164:     setError() called on ANY failure
-// F171:     WriteMessage validates buffer size before processing
-// F172:     ReadMessage validates message length >= overhead before processing
-type NqHandshake struct {
+// F42:  Ekem uses MixKey (2-output HKDF). Skem uses MixKeyAndHash (3-output HKDF).
+// F43:  Ekem ciphertext is plaintext (MixHash). Skem ciphertext is encrypted (EncryptAndHash).
+// F57:  ownRandApplied tracked for PSK validity.
+// F62:  Sticky error state, no recovery.
+// F69:  Skem read: decapsulate with DECRYPTED CT, not wire CT.
+// F90:  E, Ekem, and Skem all set ownRandApplied.
+// F137: pqBuildName has dual format (EKEM==SKEM vs EKEM!=SKEM).
+// F138: PSK validity check on write-side only (Token::S write).
+// F151: Payload encrypt/decrypt always LAST after all tokens.
+// F154: buildName is one of 5 variants (this is the PQ variant).
+// F157: PQ Token::E uses EKEM types, Token::S uses SKEM types.
+// F158: PQ Ekem write identical to Hybrid Ekem write.
+// F159: PQ Skem write calls psk_validity_check.
+// F162: Destroy() zeros ALL fields.
+// F164: setError() called on ANY failure.
+// F171: WriteMessage validates buffer size before processing.
+// F172: ReadMessage validates message length >= overhead before processing.
+type PqHandshake struct {
 	HandshakeInternals
-	dh DH // DH algorithm (X25519)
 }
 
-// NewNqHandshake creates a classical DH-only Noise handshake.
-// Pattern must be PatternTypeDH. Returns error for PQ or Hybrid patterns.
-func NewNqHandshake(
+// NewPqHandshake creates a PQ (KEM-only) Noise handshake.
+// Pattern must be PatternTypeKEM. Returns error for DH or Hybrid patterns.
+//
+// CipherSuite must have EKEM, SKEM, Cipher, and Hash set. DH is not used.
+// If EKEM and SKEM are the same KEM, pass the same instance for both.
+func NewPqHandshake(
 	pattern *HandshakePattern,
 	initiator bool,
 	suite CipherSuite,
 	opts ...Option,
-) (*NqHandshake, error) {
-	if pattern.Type() != PatternTypeDH {
-		return nil, fmt.Errorf("%w: NQ handshake requires DH-only pattern, got %d",
+) (*PqHandshake, error) {
+	if pattern.Type() != PatternTypeKEM {
+		return nil, fmt.Errorf("%w: PQ handshake requires KEM-only pattern, got %d",
 			ErrInvalidPattern, pattern.Type())
 	}
-	if suite.DH == nil || suite.Cipher == nil || suite.Hash == nil {
-		return nil, fmt.Errorf("%w: CipherSuite requires DH, Cipher, and Hash", ErrMissingKey)
+	if suite.EKEM == nil || suite.SKEM == nil || suite.Cipher == nil || suite.Hash == nil {
+		return nil, fmt.Errorf("%w: CipherSuite requires EKEM, SKEM, Cipher, and Hash", ErrMissingKey)
 	}
 
 	ho := applyOptions(opts)
@@ -52,31 +60,35 @@ func NewNqHandshake(
 		rng = rand.Reader
 	}
 
-	hs := &NqHandshake{dh: suite.DH}
+	hs := &PqHandshake{}
 	hs.pattern = pattern
 	hs.initiator = initiator
 	hs.rng = rng
 	hs.cipher = suite.Cipher
 	hs.hash = suite.Hash
+	hs.ekem = suite.EKEM
+	hs.skem = suite.SKEM
 
 	// Build protocol name and initialize symmetric state
-	name := nqBuildName(pattern, suite)
+	// F137/F154: PQ dual-format build_name
+	name := pqBuildName(pattern, suite)
 	hs.symmetricState = InitializeSymmetric(suite.Hash, suite.Cipher, name)
 
 	// Mix prologue (Noise spec: always mixed, even if empty)
 	hs.symmetricState.MixHash(ho.prologue)
 
-	// Set local static key
+	// F157: PQ static keys are KEM keys (SKEM type), not DH keys.
+	// Set local static key (KEM keypair stored in s field)
 	if ho.staticKey != nil {
 		hs.s = ho.staticKey
 	}
 
-	// Set remote static public key
+	// Set remote static public key (KEM public key stored in rs field)
 	if ho.remoteStatic != nil {
 		hs.rs = &KeyPair{Public: ho.remoteStatic}
 	}
 
-	// Process pre-messages (F152: pre-message E has different mix logic)
+	// Process pre-messages
 	if err := hs.processPreMessages(); err != nil {
 		hs.Destroy()
 		return nil, err
@@ -89,28 +101,26 @@ func NewNqHandshake(
 }
 
 // processPreMessages mixes pre-message tokens into the handshake hash.
-// F152: Pre-message Token::E mixes public key + conditional mixKey if hasPSK.
-// F46: Pre-message order is DH first, KEM second (NQ has no KEM, so DH only).
-func (hs *NqHandshake) processPreMessages() error {
+// F46: Pre-message order is DH first, KEM second. PQ has no DH, only KEM pubkeys.
+// F157: PQ uses SKEM public keys for pre-message S tokens.
+func (hs *PqHandshake) processPreMessages() error {
 	// Initiator pre-messages
 	preInit := hs.pattern.PreInitiator()
 	for _, token := range preInit {
 		switch token {
 		case TokenE:
 			if hs.initiator {
-				// Our ephemeral - should already be set (unusual for pre-message)
 				if hs.e == nil {
 					return fmt.Errorf("%w: pre-message e requires ephemeral key", ErrMissingKey)
 				}
 				hs.symmetricState.MixHash(hs.e.Public)
 			} else {
-				// Remote ephemeral
 				if hs.re == nil {
 					return fmt.Errorf("%w: pre-message re requires remote ephemeral", ErrMissingKey)
 				}
 				hs.symmetricState.MixHash(hs.re.Public)
 			}
-			// F152: conditional mixKey if hasPSK
+			// Conditional MixKey if hasPSK (same as NQ)
 			if hs.pattern.HasPSK() {
 				var pubkey []byte
 				if hs.initiator {
@@ -123,6 +133,7 @@ func (hs *NqHandshake) processPreMessages() error {
 				}
 			}
 		case TokenS:
+			// F157: PQ static keys are KEM (SKEM) public keys
 			if hs.initiator {
 				if hs.s == nil {
 					return fmt.Errorf("%w: pre-message s requires static key", ErrMissingKey)
@@ -187,12 +198,10 @@ func (hs *NqHandshake) processPreMessages() error {
 }
 
 // WriteMessage writes the next handshake message.
-// F12: Ephemeral keys generated here, never from constructor.
-// F36: Acquires exclusive access via atomic guard.
 // F151: Payload encrypted LAST after all tokens.
 // F164: setError called on ANY failure.
 // F171: Buffer size validated before processing.
-func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
+func (hs *PqHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if err := hs.acquireUse(); err != nil {
 		return 0, err
 	}
@@ -206,7 +215,7 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 	}
 
 	// F171: Check buffer size before processing
-	overhead, err := hs.getNextMessageOverheadNQ()
+	overhead, err := hs.getNextMessageOverheadPQ()
 	if err != nil {
 		hs.setError(err)
 		return 0, err
@@ -247,8 +256,6 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 	}
 
 	// F151: Payload encrypted LAST after all tokens.
-	// Always call EncryptAndHash even for empty payload - it MixHashes the result
-	// which is required for handshake hash to match Rust (verified empirically).
 	ct, encErr := hs.symmetricState.EncryptAndHash(payload)
 	if encErr != nil {
 		hs.setError(encErr)
@@ -263,11 +270,10 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 }
 
 // ReadMessage reads and processes an incoming handshake message.
-// F36: Acquires exclusive access.
 // F151: Payload decrypted LAST.
 // F164: setError called on ANY failure.
 // F172: Message length validated >= overhead.
-func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
+func (hs *PqHandshake) ReadMessage(message, out []byte) (int, error) {
 	if err := hs.acquireUse(); err != nil {
 		return 0, err
 	}
@@ -281,7 +287,7 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 	}
 
 	// F172: Validate message length
-	overhead, err := hs.getNextMessageOverheadNQ()
+	overhead, err := hs.getNextMessageOverheadPQ()
 	if err != nil {
 		hs.setError(err)
 		return 0, err
@@ -315,7 +321,6 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 	}
 
 	// F151: Payload decrypted LAST.
-	// Always call DecryptAndHash even for empty remaining - it MixHashes the ciphertext.
 	remaining := reader.rest()
 	pt, decErr := hs.symmetricState.DecryptAndHash(remaining)
 	if decErr != nil {
@@ -342,7 +347,7 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 // Finalize extracts transport keys and zeros handshake state.
 // F117: Sets finalized=true, prevents double-finalize.
 // F124: Requires HasKey (at least one MixKey occurred).
-func (hs *NqHandshake) Finalize() (*TransportState, error) {
+func (hs *PqHandshake) Finalize() (*TransportState, error) {
 	if err := hs.acquireUse(); err != nil {
 		return nil, err
 	}
@@ -375,23 +380,23 @@ func (hs *NqHandshake) Finalize() (*TransportState, error) {
 }
 
 // GetNextMessageOverhead returns the byte overhead for the next message.
-func (hs *NqHandshake) GetNextMessageOverhead() (int, error) {
+func (hs *PqHandshake) GetNextMessageOverhead() (int, error) {
 	if err := hs.checkState(); err != nil {
 		return 0, err
 	}
-	return hs.getNextMessageOverheadNQ()
+	return hs.getNextMessageOverheadPQ()
 }
 
-// Destroy zeros ALL fields in the NQ handshake.
-// F128/F162: Zeros HandshakeInternals + NQ-specific dh field.
-func (hs *NqHandshake) Destroy() {
+// Destroy zeros ALL fields in the PQ handshake.
+// F128/F162: HandshakeInternals.Destroy() zeros all fields including ekem/skem.
+func (hs *PqHandshake) Destroy() {
 	hs.HandshakeInternals.Destroy()
-	hs.dh = nil
 }
 
-// getNextMessageOverheadNQ calculates overhead for the next NQ message.
+// getNextMessageOverheadPQ calculates overhead for the next PQ message.
 // F68: Simulates has_key() changes during token processing for accurate overhead.
-func (hs *NqHandshake) getNextMessageOverheadNQ() (int, error) {
+// F157: Uses EKEM sizes for Token::E, SKEM sizes for Token::S.
+func (hs *PqHandshake) getNextMessageOverheadPQ() (int, error) {
 	// Peek at next message tokens without advancing index
 	var tokens []Token
 	switch {
@@ -424,27 +429,36 @@ func (hs *NqHandshake) getNextMessageOverheadNQ() (int, error) {
 	}
 
 	overhead := 0
-	// F68: Simulate has_key() to predict overhead accurately
 	hasKey := hs.symmetricState.HasKey()
-	dhPubLen := hs.dh.PubKeyLen()
 
 	hasPSK := hs.pattern.HasPSK()
 
 	for _, token := range tokens {
 		switch token {
 		case TokenE:
-			overhead += dhPubLen
+			// F157: PQ Token::E uses EKEM public key size
+			overhead += hs.ekem.PubKeyLen()
 			// E with PSK does MixKey(pubkey), establishing a key
 			if hasPSK {
 				hasKey = true
 			}
 		case TokenS:
-			overhead += dhPubLen
+			// F157: PQ Token::S uses SKEM public key size
+			overhead += hs.skem.PubKeyLen()
 			if hasKey {
 				overhead += TagLen
 			}
-		case TokenEE, TokenES, TokenSE, TokenSS:
-			// DH tokens establish keys but add no wire bytes
+		case TokenEkem:
+			// Ekem: ciphertext + MixKey (establishes key)
+			// F43: Ekem ciphertext is plaintext (MixHash only, no encrypt)
+			overhead += hs.ekem.CiphertextLen()
+			hasKey = true
+		case TokenSkem:
+			// F43: Skem ciphertext is encrypted (EncryptAndHash)
+			overhead += hs.skem.CiphertextLen()
+			if hasKey {
+				overhead += TagLen // EncryptAndHash adds tag
+			}
 			hasKey = true
 		case TokenPsk:
 			hasKey = true
@@ -461,72 +475,54 @@ func (hs *NqHandshake) getNextMessageOverheadNQ() (int, error) {
 
 // processWriteToken processes a single token during WriteMessage.
 // Returns the number of bytes written to out.
-func (hs *NqHandshake) processWriteToken(token Token, out []byte) (int, error) {
+func (hs *PqHandshake) processWriteToken(token Token, out []byte) (int, error) {
 	switch token {
 	case TokenE:
 		return hs.writeTokenE(out)
 	case TokenS:
 		return hs.writeTokenS(out)
-	case TokenEE:
-		return 0, hs.doDH(hs.e, hs.re)
-	case TokenES:
-		if hs.initiator {
-			return 0, hs.doDH(hs.e, hs.rs)
-		}
-		return 0, hs.doDH(hs.s, hs.re)
-	case TokenSE:
-		if hs.initiator {
-			return 0, hs.doDH(hs.s, hs.re)
-		}
-		return 0, hs.doDH(hs.e, hs.rs)
-	case TokenSS:
-		return 0, hs.doDH(hs.s, hs.rs)
+	case TokenEkem:
+		return hs.writeTokenEkem(out)
+	case TokenSkem:
+		return hs.writeTokenSkem(out)
 	case TokenPsk:
 		return 0, hs.processTokenPsk()
 	default:
-		return 0, fmt.Errorf("%w: unsupported NQ token %d", ErrInvalidPattern, token)
+		return 0, fmt.Errorf("%w: unsupported PQ token %d", ErrInvalidPattern, token)
 	}
 }
 
 // processReadToken processes a single token during ReadMessage.
-func (hs *NqHandshake) processReadToken(token Token, reader *messageReader) error {
+func (hs *PqHandshake) processReadToken(token Token, reader *messageReader) error {
 	switch token {
 	case TokenE:
 		return hs.readTokenE(reader)
 	case TokenS:
 		return hs.readTokenS(reader)
-	case TokenEE:
-		return hs.doDH(hs.e, hs.re)
-	case TokenES:
-		if hs.initiator {
-			return hs.doDH(hs.e, hs.rs)
-		}
-		return hs.doDH(hs.s, hs.re)
-	case TokenSE:
-		if hs.initiator {
-			return hs.doDH(hs.s, hs.re)
-		}
-		return hs.doDH(hs.e, hs.rs)
-	case TokenSS:
-		return hs.doDH(hs.s, hs.rs)
+	case TokenEkem:
+		return hs.readTokenEkem(reader)
+	case TokenSkem:
+		return hs.readTokenSkem(reader)
 	case TokenPsk:
 		return hs.processTokenPsk()
 	default:
-		return fmt.Errorf("%w: unsupported NQ token %d", ErrInvalidPattern, token)
+		return fmt.Errorf("%w: unsupported PQ token %d", ErrInvalidPattern, token)
 	}
 }
 
-// writeTokenE generates ephemeral key, writes pubkey, mixes.
+// writeTokenE generates ephemeral KEM keypair, writes pubkey, mixes.
 // F12: Ephemeral generated HERE, inside WriteMessage.
-// F57: Sets ownRandApplied.
-func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
+// F57/F90: Sets ownRandApplied.
+// F157: PQ Token::E uses EKEM types.
+func (hs *PqHandshake) writeTokenE(out []byte) (int, error) {
 	if hs.e != nil {
 		return 0, fmt.Errorf("%w: ephemeral already set", ErrInvalidState)
 	}
 
-	kp, err := hs.dh.GenerateKeypair(hs.rng)
+	// F157: Generate EKEM ephemeral keypair
+	kp, err := hs.ekem.GenerateKeypair(hs.rng)
 	if err != nil {
-		return 0, fmt.Errorf("%w: ephemeral keygen: %v", ErrDH, err)
+		return 0, fmt.Errorf("%w: ephemeral keygen: %v", ErrKEM, err)
 	}
 
 	hs.e = &kp
@@ -534,7 +530,7 @@ func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
 	// Mix into handshake hash (Rust order: MixHash -> MixKey -> copy -> set flag)
 	hs.symmetricState.MixHash(hs.e.Public)
 
-	// F152: Message-body Token::E does conditional mixKey if hasPSK
+	// Conditional MixKey if hasPSK
 	if hs.pattern.HasPSK() {
 		if err := hs.symmetricState.MixKey(hs.e.Public); err != nil {
 			return 0, err
@@ -544,15 +540,16 @@ func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
 	// Write ephemeral pubkey to output
 	n := copy(out, hs.e.Public)
 
-	// F57: Set AFTER crypto ops + write (matches Rust order)
+	// F57/F90: Set AFTER crypto ops + write (matches Rust order)
 	hs.ownRandApplied = true
 
 	return n, nil
 }
 
-// readTokenE reads remote ephemeral from message.
-func (hs *NqHandshake) readTokenE(reader *messageReader) error {
-	pubLen := hs.dh.PubKeyLen()
+// readTokenE reads remote ephemeral KEM public key from message.
+// F157: PQ Token::E uses EKEM types.
+func (hs *PqHandshake) readTokenE(reader *messageReader) error {
+	pubLen := hs.ekem.PubKeyLen()
 	pubBytes, err := reader.read(pubLen)
 	if err != nil {
 		return err
@@ -563,7 +560,7 @@ func (hs *NqHandshake) readTokenE(reader *messageReader) error {
 
 	hs.symmetricState.MixHash(hs.re.Public)
 
-	// F152: conditional mixKey if hasPSK
+	// Conditional MixKey if hasPSK
 	if hs.pattern.HasPSK() {
 		if err := hs.symmetricState.MixKey(hs.re.Public); err != nil {
 			return err
@@ -573,9 +570,10 @@ func (hs *NqHandshake) readTokenE(reader *messageReader) error {
 	return nil
 }
 
-// writeTokenS encrypts and writes local static public key.
-// F138: PSK validity check on write-side only.
-func (hs *NqHandshake) writeTokenS(out []byte) (int, error) {
+// writeTokenS encrypts and writes local static KEM public key.
+// F138/F159: PSK validity check on write-side only.
+// F157: PQ Token::S uses SKEM public key.
+func (hs *PqHandshake) writeTokenS(out []byte) (int, error) {
 	if hs.s == nil {
 		return 0, fmt.Errorf("%w: static key required for Token::S", ErrMissingKey)
 	}
@@ -594,9 +592,10 @@ func (hs *NqHandshake) writeTokenS(out []byte) (int, error) {
 	return n, nil
 }
 
-// readTokenS reads and decrypts remote static public key.
-func (hs *NqHandshake) readTokenS(reader *messageReader) error {
-	readLen := hs.dh.PubKeyLen()
+// readTokenS reads and decrypts remote static KEM public key.
+// F157: PQ Token::S uses SKEM public key size.
+func (hs *PqHandshake) readTokenS(reader *messageReader) error {
+	readLen := hs.skem.PubKeyLen()
 	if hs.symmetricState.HasKey() {
 		readLen += TagLen
 	}
@@ -617,28 +616,154 @@ func (hs *NqHandshake) readTokenS(reader *messageReader) error {
 	return nil
 }
 
-// doDH performs DH between local keypair and remote public key, then MixKey.
-// F78: DH can fail - propagate error.
-// F84: Low-order points caught by X25519 impl (returns zeros or error).
-func (hs *NqHandshake) doDH(local, remote *KeyPair) error {
-	if local == nil || remote == nil {
-		return fmt.Errorf("%w: DH requires both keypairs", ErrMissingKey)
+// writeTokenEkem encapsulates to remote ephemeral KEM key.
+// F42: Ekem uses MixKey (2-output HKDF), NOT MixKeyAndHash.
+// F43: Ekem ciphertext is plaintext - MixHash, not EncryptAndHash.
+// F90: Sets ownRandApplied.
+// F158: Identical to Hybrid Ekem write.
+func (hs *PqHandshake) writeTokenEkem(out []byte) (int, error) {
+	if hs.re == nil {
+		return 0, fmt.Errorf("%w: Ekem requires remote ephemeral key", ErrMissingKey)
 	}
 
-	ss, err := hs.dh.DH(*local, remote.Public)
+	// Encapsulate to remote ephemeral public key
+	ct, ss, err := hs.ekem.Encapsulate(hs.re.Public, hs.rng)
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("%w: Ekem encapsulate: %v", ErrKEM, err)
 	}
 	defer zeroSlice(ss)
 
+	// F43: Ekem ciphertext is plaintext - MixHash only
+	hs.symmetricState.MixHash(ct)
+
+	// F42: Ekem uses MixKey (2-output HKDF)
+	if err := hs.symmetricState.MixKey(ss); err != nil {
+		return 0, err
+	}
+
+	// Write ciphertext to output
+	n := copy(out, ct)
+
+	// F90: Set AFTER crypto ops complete (matches Rust order)
+	hs.ownRandApplied = true
+
+	return n, nil
+}
+
+// readTokenEkem decapsulates from local ephemeral KEM key.
+// F42: Ekem uses MixKey.
+// F43: Ekem ciphertext is plaintext - MixHash.
+func (hs *PqHandshake) readTokenEkem(reader *messageReader) error {
+	ctLen := hs.ekem.CiphertextLen()
+	ct, err := reader.read(ctLen)
+	if err != nil {
+		return err
+	}
+
+	// F43: MixHash the plaintext ciphertext FIRST (matches Rust order)
+	hs.symmetricState.MixHash(ct)
+
+	if hs.e == nil {
+		return fmt.Errorf("%w: Ekem read requires local ephemeral key", ErrMissingKey)
+	}
+
+	// Decapsulate using local ephemeral secret key
+	ss, err := hs.ekem.Decapsulate(ct, hs.e.SecretSlice())
+	if err != nil {
+		return fmt.Errorf("%w: Ekem decapsulate: %v", ErrKEM, err)
+	}
+	defer zeroSlice(ss)
+
+	// F42: MixKey with shared secret
 	return hs.symmetricState.MixKey(ss)
+}
+
+// writeTokenSkem encapsulates to remote static KEM key.
+// F42: Skem uses MixKeyAndHash (3-output HKDF), NOT MixKey.
+// F43: Skem ciphertext IS encrypted - EncryptAndHash, not MixHash.
+// F90: Sets ownRandApplied.
+// F159: Skem write calls PSK validity check.
+func (hs *PqHandshake) writeTokenSkem(out []byte) (int, error) {
+	if hs.rs == nil {
+		return 0, fmt.Errorf("%w: Skem requires remote static key", ErrMissingKey)
+	}
+
+	// F86/F159: PSK validity check - if PSK was applied, must have own randomness
+	if hs.pskApplied && !hs.ownRandApplied {
+		return 0, fmt.Errorf("%w: PSK requires own randomness before Skem", ErrPSKInvalid)
+	}
+
+	// Encapsulate to remote static public key
+	ct, ss, err := hs.skem.Encapsulate(hs.rs.Public, hs.rng)
+	if err != nil {
+		return 0, fmt.Errorf("%w: Skem encapsulate: %v", ErrKEM, err)
+	}
+	defer zeroSlice(ss)
+
+	// F43: Skem ciphertext is encrypted via EncryptAndHash
+	encCt, err := hs.symmetricState.EncryptAndHash(ct)
+	if err != nil {
+		return 0, err
+	}
+
+	// F42: Skem uses MixKeyAndHash (3-output HKDF)
+	if err := hs.symmetricState.MixKeyAndHash(ss); err != nil {
+		return 0, err
+	}
+
+	// Write encrypted ciphertext to output
+	n := copy(out, encCt)
+
+	// F90: Set AFTER all crypto ops complete (matches Rust order)
+	hs.ownRandApplied = true
+
+	return n, nil
+}
+
+// readTokenSkem decapsulates from local static KEM key.
+// F42: Skem uses MixKeyAndHash.
+// F43: Skem ciphertext IS encrypted - DecryptAndHash.
+// F69: CRITICAL - decapsulate with DECRYPTED CT, not wire CT.
+func (hs *PqHandshake) readTokenSkem(reader *messageReader) error {
+	// Read encrypted ciphertext from wire
+	readLen := hs.skem.CiphertextLen()
+	if hs.symmetricState.HasKey() {
+		readLen += TagLen
+	}
+
+	// F69: ctEnc = wire ciphertext (possibly encrypted)
+	ctEnc, err := reader.read(readLen)
+	if err != nil {
+		return err
+	}
+
+	// F43/F69: DecryptAndHash to get the plaintext KEM ciphertext
+	// F69: ctPlain = decrypted KEM ciphertext. Decapsulate with ctPlain, NOT ctEnc.
+	ctPlain, err := hs.symmetricState.DecryptAndHash(ctEnc)
+	if err != nil {
+		return err
+	}
+
+	if hs.s == nil {
+		return fmt.Errorf("%w: Skem read requires local static key", ErrMissingKey)
+	}
+
+	// F69: Decapsulate with DECRYPTED CT (ctPlain), not wire CT (ctEnc)
+	ss, err := hs.skem.Decapsulate(ctPlain, hs.s.SecretSlice())
+	if err != nil {
+		return fmt.Errorf("%w: Skem decapsulate: %v", ErrKEM, err)
+	}
+	defer zeroSlice(ss)
+
+	// F42: MixKeyAndHash with shared secret
+	return hs.symmetricState.MixKeyAndHash(ss)
 }
 
 // processTokenPsk mixes a pre-shared key.
 // F86: Sets pskApplied for validity checks. Does NOT set ownRandApplied.
 // PSK is a pre-shared secret, not locally-generated randomness.
-// Only Token::E satisfies the own-randomness requirement in NQ (F90).
-func (hs *NqHandshake) processTokenPsk() error {
+// Only E, Ekem, and Skem satisfy the own-randomness requirement (F90).
+func (hs *PqHandshake) processTokenPsk() error {
 	psk, err := hs.psks.Pop()
 	if err != nil {
 		return fmt.Errorf("%w: no PSK available", ErrPSKInvalid)
@@ -653,13 +778,28 @@ func (hs *NqHandshake) processTokenPsk() error {
 	return hs.symmetricState.MixKeyAndHash(psk[:])
 }
 
-// nqBuildName constructs the Noise protocol name for NQ handshakes.
-// F11/F79: Format: "Noise_{pattern}_{DH}_{Cipher}_{Hash}"
-// F154: NQ has exactly one format (simplest of the 5 variants).
-func nqBuildName(pattern *HandshakePattern, suite CipherSuite) string {
-	return fmt.Sprintf("Noise_%s_%s_%s_%s",
+// pqBuildName constructs the Noise protocol name for PQ handshakes.
+// F137: Dual format - different when EKEM and SKEM are the same vs different.
+// F154: One of 5 format variants (NQ has 1, PQ has 2, Hybrid has 2).
+//
+// When EKEM == SKEM (same name): "Noise_pqXX_MLKEM768_ChaChaPoly_SHA256"
+// When EKEM != SKEM (diff name): "Noise_pqXX_MLKEM768+MLKEM1024_ChaChaPoly_SHA256"
+func pqBuildName(pattern *HandshakePattern, suite CipherSuite) string {
+	ekemName := suite.EKEM.Name()
+	skemName := suite.SKEM.Name()
+
+	if ekemName == skemName {
+		return fmt.Sprintf("Noise_%s_%s_%s_%s",
+			pattern.Name(),
+			ekemName,
+			suite.Cipher.Name(),
+			suite.Hash.Name(),
+		)
+	}
+	return fmt.Sprintf("Noise_%s_%s+%s_%s_%s",
 		pattern.Name(),
-		suite.DH.Name(),
+		ekemName,
+		skemName,
 		suite.Cipher.Name(),
 		suite.Hash.Name(),
 	)

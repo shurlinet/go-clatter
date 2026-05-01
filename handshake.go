@@ -87,8 +87,9 @@ type HandshakeInternals struct {
 	status      HandshakeStatus
 	initIdx     int // initiator message index
 	respIdx     int // responder message index
-	finalized   bool
+	finalized      bool
 	ownRandApplied bool // F57: tracks local entropy contribution
+	pskApplied     bool // F86: tracks whether PSK token processed in this handshake
 
 	// PSK queue
 	psks PSKQueue
@@ -169,7 +170,7 @@ func (h *HandshakeInternals) destroyKeys() {
 }
 
 // Destroy zeros ALL fields in the handshake internals.
-// F128: Must zero symmetricState, s, e, rs, re, psks, rng, pattern indices.
+// F128: Must zero symmetricState, s, e, rs, re, psks, rng, ekem, skem, pattern indices.
 // All pointers nil'd after zeroing to prevent stale access.
 func (h *HandshakeInternals) Destroy() {
 	if h.symmetricState != nil {
@@ -181,7 +182,10 @@ func (h *HandshakeInternals) Destroy() {
 	h.initIdx = 0
 	h.respIdx = 0
 	h.ownRandApplied = false
+	h.pskApplied = false
 	h.rng = nil
+	h.ekem = nil
+	h.skem = nil
 }
 
 // IsFinished returns true when the handshake is complete.

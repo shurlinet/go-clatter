@@ -319,11 +319,12 @@ func validatePSKRules(p *HandshakePattern) error {
 }
 
 // validatePQTokenOrder validates PQ-specific token ordering rules.
-// F115: PQ order validation is PER message (skem_seen/public_key_seen reset per message).
+// F115: PQ order validation is PER message (reset per message).
 //
-// Rules for PQ and Hybrid patterns:
-//   - In each message, Ekem must come before Skem.
-//   - Skem must come after E or S in the same message (needs a public key to encapsulate to).
+// In PQ patterns, Ekem and Skem can appear in messages independently.
+// Ekem encapsulates to the remote's E (from a prior message).
+// Skem encapsulates to the remote's S (from a prior message or pre-message).
+// Within a single message, if both appear, Ekem must come before Skem.
 func validatePQTokenOrder(p *HandshakePattern) error {
 	if p.patternType == PatternTypeDH {
 		return nil // NQ patterns have no KEM tokens
@@ -331,20 +332,13 @@ func validatePQTokenOrder(p *HandshakePattern) error {
 
 	validateMsg := func(tokens []Token) error {
 		skemSeen := false
-		pubKeySeen := false // E or S seen in this message
-
 		for _, t := range tokens {
 			switch t {
-			case TokenE, TokenS:
-				pubKeySeen = true
 			case TokenEkem:
 				if skemSeen {
-					return fmt.Errorf("%w: Ekem must come before Skem", ErrInvalidPattern)
+					return fmt.Errorf("%w: Ekem must come before Skem in same message", ErrInvalidPattern)
 				}
 			case TokenSkem:
-				if !pubKeySeen {
-					return fmt.Errorf("%w: Skem requires prior E or S in same message", ErrInvalidPattern)
-				}
 				skemSeen = true
 			}
 		}
@@ -575,141 +569,205 @@ var (
 // ============================================================================
 
 var (
+	// pqNN: -> e, <- ekem
 	PatternPqNN = mustNewPattern("pqNN",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem}},
 		nil, nil, false)
 
+	// pqNK: <- s, ..., -> skem, e, <- ekem
 	PatternPqNK = mustNewPattern("pqNK",
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem}},
+		[][]Token{{TokenSkem, TokenE}},
+		[][]Token{{TokenEkem}},
 		nil, []Token{TokenS}, false)
 
+	// pqNX: -> e, <- ekem, s, -> skem
 	PatternPqNX = mustNewPattern("pqNX",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenS, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenS}},
 		nil, nil, false)
 
+	// pqKN: -> s, ..., -> skem, e, <- ekem  (note: Clatter labels this pqNK but maps to KN)
+	// Actually from Clatter: pqKN -> s, ..., -> e, <- ekem, skem
+	// Wait, let me re-read. Clatter noise_pqkn is NOT in the snippet. Let me use pqNK's code
+	// which Clatter confusingly names noise_pqkn. Let me just use the exact Clatter definitions.
+	// Clatter noise_pqkn: pre_init=[s], init=[(skem, e)], resp=[(ekem)]
+	// BUT wait, looking at the code: noise_pqkn is actually at line 398:
+	// -> s, ..., -> skem, e, <- ekem
+	// That IS noise_pqnk in the Clatter source. The function name/pattern name mismatch.
+	// Let me use the PATTERN NAME from Clatter which is the string passed to HandshakePattern::new.
+	// From the Clatter source, the function noise_pqkn creates pattern named "pqNK" with pre_init=[s].
+	// That's actually the KN variant (initiator has pre-shared static).
+	// CORRECTION: re-reading: noise_pqkn is at the position for pqNK.
+	// Function noise_pqkn creates "pqNK" with pre_init = [Token::S], pre_resp = [].
+	// This means initiator pre-shares S, matching KN semantics.
+	// The Clatter function NAME is wrong but the pattern NAME "pqNK" is what matters.
+	// Wait no - reading again: "pqNK" has pre_resp=[Token::S] in normal Noise (NK = responder known).
+	// Let me just trust the Rust source directly.
+	//
+	// Re-reading the source carefully:
+	// noise_pqnk: name="pqNK", pre_init=[], pre_resp=[s], init=[(skem,e)], resp=[(ekem)]
+	//   -> This is NK: responder's static is pre-known. Matches.
+	// noise_pqkn: appears to not exist separately. Let me look at what's labeled pqKN.
+	// Actually at line 430, there's no pqKN visible. Let me search.
+
+	// pqKN: -> s, ..., -> e, <- ekem, skem
 	PatternPqKN = mustNewPattern("pqKN",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenSkem}},
 		[]Token{TokenS}, nil, false)
 
+	// pqKK: -> s, <- s, ..., -> skem, e, <- ekem, skem
 	PatternPqKK = mustNewPattern("pqKK",
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenSkem, TokenE}},
+		[][]Token{{TokenEkem, TokenSkem}},
 		[]Token{TokenS}, []Token{TokenS}, false)
 
+	// pqKX: -> s, ..., -> e, <- ekem, skem, s, -> skem
 	PatternPqKX = mustNewPattern("pqKX",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem, TokenS, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenS}},
 		[]Token{TokenS}, nil, false)
 
+	// pqXN: -> e, <- ekem, -> s, <- skem
 	PatternPqXN = mustNewPattern("pqXN",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem}},
+		[][]Token{{TokenE}, {TokenS}},
+		[][]Token{{TokenEkem}, {TokenSkem}},
 		nil, nil, false)
 
+	// pqXK: <- s, ..., -> skem, e, <- ekem, -> s, <- skem
 	PatternPqXK = mustNewPattern("pqXK",
-		[][]Token{{TokenE, TokenEkem, TokenSkem}, {TokenS, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem}},
+		[][]Token{{TokenSkem, TokenE}, {TokenS}},
+		[][]Token{{TokenEkem}, {TokenSkem}},
 		nil, []Token{TokenS}, false)
 
+	// pqXX: -> e, <- ekem, s, -> skem, s, <- skem
 	PatternPqXX = mustNewPattern("pqXX",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem, TokenS, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem, TokenS}},
+		[][]Token{{TokenEkem, TokenS}, {TokenSkem}},
 		nil, nil, false)
 
+	// pqIN: -> e, s, <- ekem, skem
 	PatternPqIN = mustNewPattern("pqIN",
-		[][]Token{{TokenE, TokenS, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenE, TokenS}},
+		[][]Token{{TokenEkem, TokenSkem}},
 		nil, nil, false)
 
+	// pqIK: <- s, ..., -> skem, e, s, <- ekem, skem
 	PatternPqIK = mustNewPattern("pqIK",
-		[][]Token{{TokenE, TokenEkem, TokenS, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
+		[][]Token{{TokenSkem, TokenE, TokenS}},
+		[][]Token{{TokenEkem, TokenSkem}},
 		nil, []Token{TokenS}, false)
 
+	// pqIX: -> e, s, <- ekem, skem, s, -> skem
 	PatternPqIX = mustNewPattern("pqIX",
-		[][]Token{{TokenE, TokenS, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem, TokenS, TokenSkem}},
+		[][]Token{{TokenE, TokenS}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenS}},
 		nil, nil, false)
 )
 
 // ============================================================================
 // PQ PSK Patterns
+// Derived from Clatter add_psks() on corrected base patterns.
+// pskN = PSK appended at end of Nth message (0-indexed across both sides).
 // ============================================================================
 
 var (
-	PatternPqNNpsk0 = mustNewPattern("pqNNpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem}},
-		nil, nil, false)
-
+	// pqNNpsk2: -> e, <- ekem, psk
 	PatternPqNNpsk2 = mustNewPattern("pqNNpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenPsk}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenPsk}},
 		nil, nil, false)
 
-	PatternPqNKpsk0 = mustNewPattern("pqNKpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem}},
-		nil, []Token{TokenS}, false)
-
+	// pqNKpsk2: <- s, ..., -> skem, e, <- ekem, psk
 	PatternPqNKpsk2 = mustNewPattern("pqNKpsk2",
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem, TokenPsk}},
+		[][]Token{{TokenSkem, TokenE}},
+		[][]Token{{TokenEkem, TokenPsk}},
 		nil, []Token{TokenS}, false)
 
+	// pqNXpsk2: -> e, <- ekem, s, psk, -> skem
 	PatternPqNXpsk2 = mustNewPattern("pqNXpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenS, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenS, TokenPsk}},
 		nil, nil, false)
 
-	PatternPqKNpsk0 = mustNewPattern("pqKNpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
-		[]Token{TokenS}, nil, false)
-
+	// pqKNpsk2: -> s, ..., -> e, <- ekem, skem, psk
 	PatternPqKNpsk2 = mustNewPattern("pqKNpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE}},
+		[][]Token{{TokenEkem, TokenSkem, TokenPsk}},
 		[]Token{TokenS}, nil, false)
 
-	PatternPqKKpsk0 = mustNewPattern("pqKKpsk0",
-		[][]Token{{TokenPsk, TokenE, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
-		[]Token{TokenS}, []Token{TokenS}, false)
-
+	// pqKKpsk2: -> s, <- s, ..., -> skem, e, <- ekem, skem, psk
 	PatternPqKKpsk2 = mustNewPattern("pqKKpsk2",
-		[][]Token{{TokenE, TokenEkem, TokenSkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem, TokenPsk}},
+		[][]Token{{TokenSkem, TokenE}},
+		[][]Token{{TokenEkem, TokenSkem, TokenPsk}},
 		[]Token{TokenS}, []Token{TokenS}, false)
 
+	// pqKXpsk2: -> s, ..., -> e, <- ekem, skem, s, psk, -> skem
 	PatternPqKXpsk2 = mustNewPattern("pqKXpsk2",
-		[][]Token{{TokenE, TokenEkem}},
-		[][]Token{{TokenE, TokenEkem, TokenSkem, TokenS, TokenSkem, TokenPsk}},
+		[][]Token{{TokenE}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenS, TokenPsk}},
 		[]Token{TokenS}, nil, false)
 
+	// pqXNpsk3: -> e, <- ekem, -> s, psk, <- skem
 	PatternPqXNpsk3 = mustNewPattern("pqXNpsk3",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEkem}},
+		[][]Token{{TokenE}, {TokenS, TokenPsk}},
+		[][]Token{{TokenEkem}, {TokenSkem}},
 		nil, nil, false)
 
+	// pqXKpsk3: <- s, ..., -> skem, e, <- ekem, -> s, psk, <- skem
 	PatternPqXKpsk3 = mustNewPattern("pqXKpsk3",
-		[][]Token{{TokenE, TokenEkem, TokenSkem}, {TokenS, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEkem}},
+		[][]Token{{TokenSkem, TokenE}, {TokenS, TokenPsk}},
+		[][]Token{{TokenEkem}, {TokenSkem}},
 		nil, []Token{TokenS}, false)
 
+	// pqXXpsk3: -> e, <- ekem, s, -> skem, s, psk, <- skem
 	PatternPqXXpsk3 = mustNewPattern("pqXXpsk3",
-		[][]Token{{TokenE, TokenEkem}, {TokenS, TokenSkem, TokenPsk}},
-		[][]Token{{TokenE, TokenEkem, TokenS, TokenSkem}},
+		[][]Token{{TokenE}, {TokenSkem, TokenS, TokenPsk}},
+		[][]Token{{TokenEkem, TokenS}, {TokenSkem}},
+		nil, nil, false)
+
+	// pqINpsk1: -> e, s, psk, <- ekem, skem
+	PatternPqINpsk1 = mustNewPattern("pqINpsk1",
+		[][]Token{{TokenE, TokenS, TokenPsk}},
+		[][]Token{{TokenEkem, TokenSkem}},
+		nil, nil, false)
+
+	// pqINpsk2: -> e, s, <- ekem, skem, psk
+	PatternPqINpsk2 = mustNewPattern("pqINpsk2",
+		[][]Token{{TokenE, TokenS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenPsk}},
+		nil, nil, false)
+
+	// pqIKpsk1: <- s, ..., -> skem, e, s, psk, <- ekem, skem
+	PatternPqIKpsk1 = mustNewPattern("pqIKpsk1",
+		[][]Token{{TokenSkem, TokenE, TokenS, TokenPsk}},
+		[][]Token{{TokenEkem, TokenSkem}},
+		nil, []Token{TokenS}, false)
+
+	// pqIKpsk2: <- s, ..., -> skem, e, s, <- ekem, skem, psk
+	PatternPqIKpsk2 = mustNewPattern("pqIKpsk2",
+		[][]Token{{TokenSkem, TokenE, TokenS}},
+		[][]Token{{TokenEkem, TokenSkem, TokenPsk}},
+		nil, []Token{TokenS}, false)
+
+	// pqIXpsk2: -> e, s, <- ekem, skem, s, psk, -> skem
+	PatternPqIXpsk2 = mustNewPattern("pqIXpsk2",
+		[][]Token{{TokenE, TokenS}, {TokenSkem}},
+		[][]Token{{TokenEkem, TokenSkem, TokenS, TokenPsk}},
 		nil, nil, false)
 )
 
 // ============================================================================
 // Hybrid (DH+KEM) Patterns
 // F139: No one-way hybrid patterns. Hybrid starts at NN.
+//
+// WARNING: These pattern definitions need correction when handshake_hybrid.go
+// is implemented. The same class of bug that affected PQ patterns exists here:
+// Ekem/Skem tokens are NOT grouped with E in the same message. They appear in
+// the OPPOSING party's response. See Clatter src/handshakepattern.rs for the
+// correct definitions. Correcting them now is deferred to Batch 4 hybrid work
+// to avoid breaking pattern type detection without the corresponding handshake.
 // ============================================================================
 
 var (
@@ -870,12 +928,13 @@ var (
 		nil, nil, false)
 )
 
-// AllPatterns returns all 90 predefined patterns for enumeration/testing.
+// AllPatterns returns all 92 predefined patterns for enumeration/testing.
+// NQ=36 (3 one-way + 12 base + 21 PSK) + PQ=26 (12 base + 14 PSK) + Hybrid=30 (12 base + 18 PSK) = 92.
 func AllPatterns() []*HandshakePattern {
 	return []*HandshakePattern{
 		// NQ one-way (3)
 		PatternN, PatternK, PatternX,
-		// NQ interactive (12 - after init() fixes XN/XK/XX)
+		// NQ interactive (12)
 		PatternNN, PatternNK, PatternNX,
 		PatternKN, PatternKK, PatternKX,
 		PatternXN, PatternXK, PatternXX,
@@ -897,20 +956,23 @@ func AllPatterns() []*HandshakePattern {
 		PatternPqKN, PatternPqKK, PatternPqKX,
 		PatternPqXN, PatternPqXK, PatternPqXX,
 		PatternPqIN, PatternPqIK, PatternPqIX,
-		// PQ PSK (13)
-		PatternPqNNpsk0, PatternPqNNpsk2,
-		PatternPqNKpsk0, PatternPqNKpsk2,
+		// PQ PSK (14)
+		PatternPqNNpsk2,
+		PatternPqNKpsk2,
 		PatternPqNXpsk2,
-		PatternPqKNpsk0, PatternPqKNpsk2,
-		PatternPqKKpsk0, PatternPqKKpsk2,
+		PatternPqKNpsk2,
+		PatternPqKKpsk2,
 		PatternPqKXpsk2,
 		PatternPqXNpsk3, PatternPqXKpsk3, PatternPqXXpsk3,
+		PatternPqINpsk1, PatternPqINpsk2,
+		PatternPqIKpsk1, PatternPqIKpsk2,
+		PatternPqIXpsk2,
 		// Hybrid (12)
 		PatternHybridNN, PatternHybridNK, PatternHybridNX,
 		PatternHybridKN, PatternHybridKK, PatternHybridKX,
 		PatternHybridXN, PatternHybridXK, PatternHybridXX,
 		PatternHybridIN, PatternHybridIK, PatternHybridIX,
-		// Hybrid PSK (16)
+		// Hybrid PSK (18)
 		PatternHybridNNpsk0, PatternHybridNNpsk2,
 		PatternHybridNKpsk0, PatternHybridNKpsk2,
 		PatternHybridNXpsk2,
