@@ -57,15 +57,6 @@ type Handshaker interface {
 	Destroy()
 }
 
-// TransportState holds post-handshake encryption keys.
-// Placeholder for Batch 5 implementation.
-type TransportState struct {
-	initiatorToResponder *CipherState
-	responderToInitiator *CipherState
-	initiator            bool
-	destroyed            bool
-}
-
 // HandshakeInternals holds shared state for all handshake implementations.
 // F128: Destroy() zeros ALL fields.
 // F129: getNextMessage() uses 4-way dispatch on (initiator, status).

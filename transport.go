@@ -2,31 +2,60 @@ package clatter
 
 import "fmt"
 
+// TransportState holds post-handshake encryption keys for secure communication.
+// Port of Rust Clatter's transportstate.rs.
+//
+// F131: MaxMessageLen violations return error, not panic.
+// F132: One-way pattern enforcement (ErrOneWayViolation).
+// F133: SetReceivingNonce exists, SetSendingNonce intentionally absent.
+// F134: Explicit Destroy() zeros both CipherStates.
+// F135: Rekey does NOT reset nonce.
+// F136: send_vec/receive_vec (heap-allocating) omitted from Go API.
+// F140: Take() returns CipherStates, marks destroyed.
+type TransportState struct {
+	initiatorToResponder *CipherState
+	responderToInitiator *CipherState
+	pattern              *HandshakePattern
+	h                    []byte // handshake hash (for dual-layer binding)
+	initiator            bool
+	destroyed            bool
+}
+
+// newTransportState creates a TransportState from a completed handshake's components.
+func newTransportState(cs1, cs2 *CipherState, pattern *HandshakePattern, h []byte, initiator bool) *TransportState {
+	return &TransportState{
+		initiatorToResponder: cs1,
+		responderToInitiator: cs2,
+		pattern:              pattern,
+		h:                    h,
+		initiator:            initiator,
+	}
+}
+
 // Send encrypts payload for sending to the remote party.
-// F131: Returns error (not panic) when message exceeds MaxMessageLen.
-// F132: One-way enforcement deferred to Batch 5 (full TransportState port).
+// F131: Returns error when message exceeds MaxMessageLen.
+// F132: One-way enforcement - responder cannot send after one-way handshake.
 func (ts *TransportState) Send(payload, out []byte) (int, error) {
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
 
-	var cs *CipherState
-	if ts.initiator {
-		cs = ts.initiatorToResponder
-	} else {
-		cs = ts.responderToInitiator
-	}
-
-	if cs == nil {
-		return 0, ErrMissingKey
-	}
-
-	needed := len(payload) + TagLen
-	if needed > MaxMessageLen {
+	outLen := len(payload) + TagLen
+	if outLen > MaxMessageLen {
 		return 0, ErrMessageTooLarge
 	}
-	if len(out) < needed {
-		return 0, fmt.Errorf("%w: need %d bytes, have %d", ErrBufferTooSmall, needed, len(out))
+	if len(out) < outLen {
+		return 0, fmt.Errorf("%w: need %d bytes, have %d", ErrBufferTooSmall, outLen, len(out))
+	}
+
+	// F132: One-way pattern enforcement
+	if ts.pattern != nil && ts.pattern.IsOneWay() && !ts.initiator {
+		return 0, ErrOneWayViolation
+	}
+
+	cs := ts.sendCipher()
+	if cs == nil {
+		return 0, ErrMissingKey
 	}
 
 	ct, err := cs.EncryptWithAd(nil, payload)
@@ -37,26 +66,57 @@ func (ts *TransportState) Send(payload, out []byte) (int, error) {
 	return n, nil
 }
 
+// SendInPlace encrypts msgLen bytes in msg in-place.
+// Returns total ciphertext length (msgLen + TagLen).
+// The buffer must have room for msgLen + TagLen bytes.
+// Used by DualLayer to wrap inner handshake messages with outer transport.
+func (ts *TransportState) SendInPlace(msg []byte, msgLen int) (int, error) {
+	if ts.destroyed {
+		return 0, ErrDestroyed
+	}
+
+	outLen := msgLen + TagLen
+	if outLen > MaxMessageLen {
+		return 0, ErrMessageTooLarge
+	}
+	if len(msg) < outLen {
+		return 0, fmt.Errorf("%w: need %d bytes, have %d", ErrBufferTooSmall, outLen, len(msg))
+	}
+
+	if ts.pattern != nil && ts.pattern.IsOneWay() && !ts.initiator {
+		return 0, ErrOneWayViolation
+	}
+
+	cs := ts.sendCipher()
+	if cs == nil {
+		return 0, ErrMissingKey
+	}
+
+	return cs.EncryptWithAdInPlace(nil, msg, msgLen)
+}
+
 // Receive decrypts a message from the remote party.
-// F131: Returns error (not panic) when message exceeds MaxMessageLen.
+// F131: Returns error when message exceeds MaxMessageLen.
+// F132: One-way enforcement - initiator cannot receive after one-way handshake.
 func (ts *TransportState) Receive(message, out []byte) (int, error) {
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
 
-	var cs *CipherState
-	if ts.initiator {
-		cs = ts.responderToInitiator
-	} else {
-		cs = ts.initiatorToResponder
+	if len(message) < TagLen {
+		return 0, fmt.Errorf("%w: message too short", ErrInvalidMessage)
 	}
-
-	if cs == nil {
-		return 0, ErrMissingKey
-	}
-
 	if len(message) > MaxMessageLen {
 		return 0, ErrMessageTooLarge
+	}
+
+	if ts.pattern != nil && ts.pattern.IsOneWay() && ts.initiator {
+		return 0, ErrOneWayViolation
+	}
+
+	cs := ts.receiveCipher()
+	if cs == nil {
+		return 0, ErrMissingKey
 	}
 
 	pt, err := cs.DecryptWithAd(nil, message)
@@ -71,7 +131,113 @@ func (ts *TransportState) Receive(message, out []byte) (int, error) {
 	return n, nil
 }
 
-// Destroy zeros both CipherStates.
+// ReceiveInPlace decrypts msgLen bytes in msg in-place.
+// Returns plaintext length (msgLen - TagLen).
+func (ts *TransportState) ReceiveInPlace(msg []byte, msgLen int) (int, error) {
+	if ts.destroyed {
+		return 0, ErrDestroyed
+	}
+
+	if msgLen < TagLen {
+		return 0, fmt.Errorf("%w: message too short", ErrInvalidMessage)
+	}
+	if msgLen > MaxMessageLen {
+		return 0, ErrMessageTooLarge
+	}
+	if msgLen > len(msg) {
+		return 0, fmt.Errorf("%w: msgLen %d exceeds buffer %d", ErrBufferTooSmall, msgLen, len(msg))
+	}
+
+	if ts.pattern != nil && ts.pattern.IsOneWay() && ts.initiator {
+		return 0, ErrOneWayViolation
+	}
+
+	cs := ts.receiveCipher()
+	if cs == nil {
+		return 0, ErrMissingKey
+	}
+
+	return cs.DecryptWithAdInPlace(nil, msg, msgLen)
+}
+
+// SendingNonce returns the forthcoming outbound nonce value.
+func (ts *TransportState) SendingNonce() uint64 {
+	cs := ts.sendCipher()
+	if cs == nil {
+		return 0
+	}
+	return cs.Nonce()
+}
+
+// ReceivingNonce returns the forthcoming inbound nonce value.
+func (ts *TransportState) ReceivingNonce() uint64 {
+	cs := ts.receiveCipher()
+	if cs == nil {
+		return 0
+	}
+	return cs.Nonce()
+}
+
+// SetReceivingNonce sets the forthcoming inbound nonce value.
+// F133: SetReceivingNonce exists; SetSendingNonce intentionally absent.
+func (ts *TransportState) SetReceivingNonce(nonce uint64) {
+	cs := ts.receiveCipher()
+	if cs != nil {
+		cs.setNonce(nonce)
+	}
+}
+
+// RekeySender rekeys the outbound cipher.
+// F135: Rekey does NOT reset nonce.
+func (ts *TransportState) RekeySender() error {
+	if ts.destroyed {
+		return ErrDestroyed
+	}
+	cs := ts.sendCipher()
+	if cs == nil {
+		return ErrMissingKey
+	}
+	return cs.Rekey()
+}
+
+// RekeyReceiver rekeys the inbound cipher.
+// F135: Rekey does NOT reset nonce.
+func (ts *TransportState) RekeyReceiver() error {
+	if ts.destroyed {
+		return ErrDestroyed
+	}
+	cs := ts.receiveCipher()
+	if cs == nil {
+		return ErrMissingKey
+	}
+	return cs.Rekey()
+}
+
+// GetHandshakeHash returns a copy of the session handshake hash.
+// Used by HybridDualLayerHandshake to bind layers.
+func (ts *TransportState) GetHandshakeHash() []byte {
+	if ts.h == nil {
+		return nil
+	}
+	out := make([]byte, len(ts.h))
+	copy(out, ts.h)
+	return out
+}
+
+// Take returns both CipherStates and marks this TransportState as destroyed.
+// F140: Consumes the TransportState (caller takes ownership of keys).
+func (ts *TransportState) Take() (initiatorToResponder, responderToInitiator *CipherState) {
+	i2r := ts.initiatorToResponder
+	r2i := ts.responderToInitiator
+	ts.initiatorToResponder = nil
+	ts.responderToInitiator = nil
+	ts.destroyed = true
+	zeroSlice(ts.h)
+	ts.h = nil
+	return i2r, r2i
+}
+
+// Destroy zeros both CipherStates and the handshake hash.
 // F134: TransportState needs explicit Destroy.
 func (ts *TransportState) Destroy() {
 	if ts.initiatorToResponder != nil {
@@ -82,5 +248,28 @@ func (ts *TransportState) Destroy() {
 		ts.responderToInitiator.Destroy()
 		ts.responderToInitiator = nil
 	}
+	zeroSlice(ts.h)
+	ts.h = nil
 	ts.destroyed = true
+}
+
+// IsDestroyed returns true if the TransportState has been destroyed.
+func (ts *TransportState) IsDestroyed() bool {
+	return ts.destroyed
+}
+
+// sendCipher returns the CipherState used for sending.
+func (ts *TransportState) sendCipher() *CipherState {
+	if ts.initiator {
+		return ts.initiatorToResponder
+	}
+	return ts.responderToInitiator
+}
+
+// receiveCipher returns the CipherState used for receiving.
+func (ts *TransportState) receiveCipher() *CipherState {
+	if ts.initiator {
+		return ts.responderToInitiator
+	}
+	return ts.initiatorToResponder
 }

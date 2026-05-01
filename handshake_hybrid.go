@@ -390,11 +390,8 @@ func (hs *HybridHandshake) Finalize() (*TransportState, error) {
 		return nil, err
 	}
 
-	ts := &TransportState{
-		initiatorToResponder: cs1,
-		responderToInitiator: cs2,
-		initiator:            hs.initiator,
-	}
+	h := hs.symmetricState.GetHandshakeHash()
+	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
 
 	hs.finalized = true
 	// F162: Zero ALL handshake state after finalize

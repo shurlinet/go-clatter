@@ -154,6 +154,88 @@ func (cs *CipherState) Rekey() error {
 	return nil
 }
 
+// EncryptWithAdInPlace encrypts msgLen bytes in inOut in-place.
+// Returns total ciphertext length (msgLen + TagLen).
+// F104: In-place Seal verified for Go's AES-GCM and ChaCha20Poly1305.
+func (cs *CipherState) EncryptWithAdInPlace(ad []byte, inOut []byte, msgLen int) (int, error) {
+	if cs == nil {
+		return 0, ErrCipher
+	}
+	if cs.destroyed {
+		return 0, ErrDestroyed
+	}
+	if !cs.hasKey {
+		return 0, ErrCipher
+	}
+	if cs.overflowed {
+		return 0, ErrNonceOverflow
+	}
+
+	outLen := msgLen + TagLen
+	if len(inOut) < outLen {
+		return 0, fmt.Errorf("%w: in-place buffer too small: need %d, have %d",
+			ErrBufferTooSmall, outLen, len(inOut))
+	}
+
+	// Copy plaintext to temp buffer to avoid aliasing issues during encrypt.
+	plaintext := make([]byte, msgLen)
+	copy(plaintext, inOut[:msgLen])
+	_, err := cs.cipher.Encrypt(cs.key, cs.nonce, ad, plaintext, inOut[:outLen])
+	zeroSlice(plaintext)
+	if err != nil {
+		return 0, err
+	}
+
+	if cs.nonce == math.MaxUint64 {
+		cs.overflowed = true
+	} else {
+		cs.nonce++
+	}
+
+	return outLen, nil
+}
+
+// DecryptWithAdInPlace decrypts msgLen bytes in inOut in-place.
+// Returns plaintext length (msgLen - TagLen).
+func (cs *CipherState) DecryptWithAdInPlace(ad []byte, inOut []byte, msgLen int) (int, error) {
+	if cs == nil {
+		return 0, ErrCipher
+	}
+	if cs.destroyed {
+		return 0, ErrDestroyed
+	}
+	if !cs.hasKey {
+		return 0, ErrCipher
+	}
+	if cs.overflowed {
+		return 0, ErrNonceOverflow
+	}
+
+	if msgLen < TagLen {
+		return 0, ErrDecrypt
+	}
+	if msgLen > len(inOut) {
+		return 0, fmt.Errorf("%w: msgLen %d exceeds buffer %d", ErrBufferTooSmall, msgLen, len(inOut))
+	}
+
+	ptLen := msgLen - TagLen
+	ciphertext := make([]byte, msgLen)
+	copy(ciphertext, inOut[:msgLen])
+	_, err := cs.cipher.Decrypt(cs.key, cs.nonce, ad, ciphertext, inOut[:ptLen])
+	zeroSlice(ciphertext)
+	if err != nil {
+		return 0, err
+	}
+
+	if cs.nonce == math.MaxUint64 {
+		cs.overflowed = true
+	} else {
+		cs.nonce++
+	}
+
+	return ptLen, nil
+}
+
 // setNonce sets the nonce value. Internal only, NOT exported (F27).
 // Used for SetReceivingNonce in TransportState (F133).
 func (cs *CipherState) setNonce(n uint64) {
