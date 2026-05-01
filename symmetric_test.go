@@ -295,6 +295,31 @@ func TestSymmetricState_SplitWithoutKey(t *testing.T) {
 	}
 }
 
+// F62: Sticky error blocks all further operations.
+func TestSymmetricState_StickyErrorBlocksOps(t *testing.T) {
+	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_sticky")
+	ss.MixKey(bytes.Repeat([]byte{0x42}, 32))
+
+	ss.SetError(ErrCipher)
+
+	// All mutating operations should return the sticky error
+	if err := ss.MixKey(bytes.Repeat([]byte{0x01}, 32)); err != ErrCipher {
+		t.Fatalf("MixKey after SetError: expected ErrCipher, got %v", err)
+	}
+	if err := ss.MixKeyAndHash(bytes.Repeat([]byte{0x01}, 32)); err != ErrCipher {
+		t.Fatalf("MixKeyAndHash after SetError: expected ErrCipher, got %v", err)
+	}
+	if _, err := ss.EncryptAndHash([]byte("x")); err != ErrCipher {
+		t.Fatalf("EncryptAndHash after SetError: expected ErrCipher, got %v", err)
+	}
+	if _, err := ss.DecryptAndHash([]byte("x")); err != ErrCipher {
+		t.Fatalf("DecryptAndHash after SetError: expected ErrCipher, got %v", err)
+	}
+	if _, _, err := ss.Split(); err != ErrCipher {
+		t.Fatalf("Split after SetError: expected ErrCipher, got %v", err)
+	}
+}
+
 // MixKeyAndHash test: verifies 3-output HKDF wiring.
 func TestSymmetricState_MixKeyAndHash(t *testing.T) {
 	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "test_mkah")

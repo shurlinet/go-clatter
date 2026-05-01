@@ -16,6 +16,8 @@ import "fmt"
 // F30:  Truncate HKDF output to KeyLen (first 32 bytes) for 64-byte hashes.
 // F38:  encryptAndHash output size depends on HasKey state.
 // F63:  setError zeros all state immediately via Destroy().
+// F166: Only SymmetricState + CipherState have explicit Destroy(). All other types
+//       rely on containment (handshake structs call Destroy on their SymmetricState).
 // F167: AD for encrypt/decrypt within handshake = current h.
 // F169: Split uses empty IKM, zeros temp keys.
 type SymmetricState struct {
@@ -58,12 +60,23 @@ func InitializeSymmetric(h HashFunc, c Cipher, protocolName string) *SymmetricSt
 	return ss
 }
 
+// checkErr returns the sticky error if the SymmetricState is in error state (F62).
+// Every mutating method must call this first.
+func (ss *SymmetricState) checkErr() error {
+	if ss.err != nil {
+		return ss.err
+	}
+	return nil
+}
+
 // MixHash updates h = Hash(h || data).
+// Intermediate buffer zeroed after hashing (contains handshake state).
 func (ss *SymmetricState) MixHash(data []byte) {
 	combined := make([]byte, ss.hashLen+len(data))
 	copy(combined, ss.h[:ss.hashLen])
 	copy(combined[ss.hashLen:], data)
 	hashed := ss.hash.Hash(combined)
+	zeroSlice(combined)
 	copy(ss.h[:], hashed[:ss.hashLen])
 }
 
@@ -74,6 +87,9 @@ func (ss *SymmetricState) MixHash(data []byte) {
 // F118: Copies ck to local before HKDF to prevent aliasing.
 // F165: After MixKey, cs is non-nil (HasKey becomes true).
 func (ss *SymmetricState) MixKey(ikm []byte) error {
+	if err := ss.checkErr(); err != nil {
+		return err
+	}
 	// F118: Copy ck to prevent aliasing during HKDF
 	ckCopy := make([]byte, ss.hashLen)
 	copy(ckCopy, ss.ck[:ss.hashLen])
@@ -112,6 +128,9 @@ func (ss *SymmetricState) MixKey(ikm []byte) error {
 // F30: Truncates tempK to KeyLen for 64-byte hashes.
 // F118: Copies ck to local before HKDF.
 func (ss *SymmetricState) MixKeyAndHash(ikm []byte) error {
+	if err := ss.checkErr(); err != nil {
+		return err
+	}
 	ckCopy := make([]byte, ss.hashLen)
 	copy(ckCopy, ss.ck[:ss.hashLen])
 
@@ -161,6 +180,9 @@ func (ss *SymmetricState) HasKey() bool {
 // F38: Output size depends on HasKey: with key = plaintext+tag, without = plaintext.
 // F167: AD = current h[:hashLen].
 func (ss *SymmetricState) EncryptAndHash(plaintext []byte) ([]byte, error) {
+	if err := ss.checkErr(); err != nil {
+		return nil, err
+	}
 	var ciphertext []byte
 
 	if ss.cs.HasKey() {
@@ -170,6 +192,7 @@ func (ss *SymmetricState) EncryptAndHash(plaintext []byte) ([]byte, error) {
 
 		var err error
 		ciphertext, err = ss.cs.EncryptWithAd(ad, plaintext)
+		zeroSlice(ad)
 		if err != nil {
 			return nil, err
 		}
@@ -191,6 +214,9 @@ func (ss *SymmetricState) EncryptAndHash(plaintext []byte) ([]byte, error) {
 // F28: MixHash is called with CIPHERTEXT (the input), not the decrypted plaintext.
 // F31: Before first MixKey, copies ciphertext verbatim.
 func (ss *SymmetricState) DecryptAndHash(ciphertext []byte) ([]byte, error) {
+	if err := ss.checkErr(); err != nil {
+		return nil, err
+	}
 	var plaintext []byte
 
 	if ss.cs.HasKey() {
@@ -199,6 +225,7 @@ func (ss *SymmetricState) DecryptAndHash(ciphertext []byte) ([]byte, error) {
 
 		var err error
 		plaintext, err = ss.cs.DecryptWithAd(ad, ciphertext)
+		zeroSlice(ad)
 		if err != nil {
 			return nil, err
 		}
@@ -223,6 +250,9 @@ func (ss *SymmetricState) DecryptAndHash(ciphertext []byte) ([]byte, error) {
 // F124: Requires HasKey (at least one MixKey must have occurred).
 // F169: Confirms F108 + F110.
 func (ss *SymmetricState) Split() (cs1, cs2 *CipherState, err error) {
+	if err := ss.checkErr(); err != nil {
+		return nil, nil, err
+	}
 	if !ss.cs.HasKey() {
 		return nil, nil, fmt.Errorf("%w: Split requires established key", ErrMissingKey)
 	}

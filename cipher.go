@@ -70,6 +70,7 @@ func (cs *CipherState) EncryptWithAd(ad, plaintext []byte) ([]byte, error) {
 	out := make([]byte, len(plaintext)+TagLen)
 	result, err := cs.cipher.Encrypt(cs.key, cs.nonce, ad, plaintext, out)
 	if err != nil {
+		zeroSlice(out)
 		return nil, err
 	}
 
@@ -106,6 +107,7 @@ func (cs *CipherState) DecryptWithAd(ad, ciphertext []byte) ([]byte, error) {
 	out := make([]byte, len(ciphertext))
 	result, err := cs.cipher.Decrypt(cs.key, cs.nonce, ad, ciphertext, out)
 	if err != nil {
+		zeroSlice(out)
 		return nil, err
 	}
 
@@ -132,16 +134,19 @@ func (cs *CipherState) Rekey() error {
 		return ErrCipher
 	}
 
-	// AEAD encrypt with nonce=MaxUint64, empty AD, zeros plaintext
-	zeros := make([]byte, KeyLen)
+	// AEAD encrypt with nonce=MaxUint64, empty AD, zeros plaintext.
+	// F110: All intermediates zeroed after use.
+	var zeros [KeyLen]byte
 	out := make([]byte, KeyLen+TagLen)
-	result, err := cs.cipher.Encrypt(cs.key, math.MaxUint64, nil, zeros, out)
+	result, err := cs.cipher.Encrypt(cs.key, math.MaxUint64, nil, zeros[:], out)
 	if err != nil {
+		zeroSlice(out)
 		return fmt.Errorf("%w: rekey failed: %v", ErrCipher, err)
 	}
 
-	// Truncate to KeyLen (discard tag)
+	// Truncate to KeyLen (discard tag), then zero the full result buffer
 	copy(cs.key[:], result[:KeyLen])
+	zeroSlice(out)
 	return nil
 }
 
