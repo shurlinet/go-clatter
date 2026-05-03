@@ -57,8 +57,13 @@ var (
 
 // PrivateKey is an ML-DSA-65 private key with explicit lifecycle management.
 //
-// All signing methods acquire a read lock; Destroy acquires a write lock.
-// After Destroy, all methods return ErrDestroyed.
+// A PrivateKey is safe for concurrent use: all signing methods acquire a
+// shared read lock, while Destroy acquires an exclusive write lock. After
+// Destroy is called, all methods return ErrDestroyed. The associated
+// PublicKey (obtained via PublicKey()) remains valid after Destroy.
+//
+// Two PrivateKey instances created from the same seed are independent;
+// destroying one does not affect the other.
 type PrivateKey struct {
 	mu        sync.RWMutex
 	key       *mldsa.PrivateKey
@@ -67,7 +72,10 @@ type PrivateKey struct {
 	destroyed bool
 }
 
-// PublicKey is an ML-DSA-65 public key.
+// PublicKey is an ML-DSA-65 public key. It is immutable and safe for
+// concurrent use from multiple goroutines without synchronization.
+// A PublicKey remains valid even after the corresponding PrivateKey
+// is destroyed.
 type PublicKey struct {
 	key *mldsa.PublicKey
 }
@@ -106,7 +114,13 @@ func privateKeyFromLib(sk *mldsa.PrivateKey) *PrivateKey {
 	return k
 }
 
-// NewPublicKey creates a public key from its 1952-byte encoded form.
+// NewPublicKey parses a 1952-byte ML-DSA-65 public key encoding and returns
+// a new PublicKey. The input bytes are copied; subsequent modification of pub
+// does not affect the returned key.
+//
+// Returns ErrInvalidPublicKeySize if len(pub) != 1952, or ErrInvalidPublicKey
+// if the encoding is malformed (note: ML-DSA-65's 10-bit coefficient packing
+// accepts all valid-length inputs with current library versions).
 func NewPublicKey(pub []byte) (*PublicKey, error) {
 	if len(pub) != PublicKeySize {
 		return nil, ErrInvalidPublicKeySize
@@ -144,24 +158,50 @@ func (k *PrivateKey) PublicKey() *PublicKey {
 	return k.pub
 }
 
-// Sign signs a message using hedged randomness (recommended for production).
+// Sign signs msg using hedged randomness (internal DRBG + system entropy).
+// This is the recommended signing mode for production. The same message
+// produces a different signature each time due to the random component,
+// which provides fault protection against RNG failures and resistance to
+// timing side-channel analysis.
+//
+// Returns ErrDestroyed if the key has been destroyed.
 func (k *PrivateKey) Sign(msg []byte) ([]byte, error) {
 	return k.signInternal(msg, "", false)
 }
 
-// SignWithContext signs a message with a context string (max 255 bytes).
+// SignWithContext signs msg with a FIPS 204 context string for domain
+// separation. The context binds the signature to a specific purpose: a
+// signature created with context "auth/v1" will not verify under context
+// "payment/v1", preventing cross-purpose replay attacks.
+//
+// The context must be at most 255 bytes (FIPS 204 limit). An empty string
+// is valid and equivalent to calling Sign.
+//
+// Returns ErrContextTooLong if len(ctx) > 255, or ErrDestroyed if the key
+// has been destroyed.
 func (k *PrivateKey) SignWithContext(msg []byte, ctx string) ([]byte, error) {
 	return k.signInternal(msg, ctx, false)
 }
 
-// SignDeterministic signs a message deterministically.
-// For test vector generation ONLY. Production code MUST use Sign.
+// SignDeterministic signs msg without hedging randomness: the same
+// (key, message) pair always produces the identical signature.
+//
+// WARNING: For test vector generation and reproducibility testing ONLY.
+// Production code MUST use Sign. Deterministic signatures leak timing
+// information (identical inputs take identical rejection-sampling paths)
+// and provide no fault protection against RNG compromise.
+//
+// Returns ErrDestroyed if the key has been destroyed.
 func (k *PrivateKey) SignDeterministic(msg []byte) ([]byte, error) {
 	return k.signInternal(msg, "", true)
 }
 
-// SignDeterministicWithContext signs deterministically with a context string.
-// For test vector generation ONLY.
+// SignDeterministicWithContext combines deterministic signing with context
+// separation. For test vector generation ONLY. See SignDeterministic for
+// warnings about deterministic mode.
+//
+// Returns ErrContextTooLong if len(ctx) > 255, or ErrDestroyed if the key
+// has been destroyed.
 func (k *PrivateKey) SignDeterministicWithContext(msg []byte, ctx string) ([]byte, error) {
 	return k.signInternal(msg, ctx, true)
 }
@@ -192,8 +232,9 @@ func (k *PrivateKey) signInternal(msg []byte, ctx string, deterministic bool) ([
 	return sig, nil
 }
 
-// Equal reports whether k and x hold the same seed.
-// Returns false if either key is nil or destroyed.
+// Equal reports whether k and x are derived from the same seed
+// (constant-time comparison). Returns false if either key is nil or
+// destroyed. Intermediate seed copies are zeroed after comparison.
 func (k *PrivateKey) Equal(x *PrivateKey) bool {
 	if k == nil || x == nil {
 		return false
@@ -220,9 +261,14 @@ func zeroSlice(b []byte) {
 	}
 }
 
-// Destroy zeros the seed, nils the underlying key, and marks this key as
-// destroyed. All subsequent operations return ErrDestroyed. Idempotent.
-// The cached PublicKey remains valid after Destroy.
+// Destroy zeros the 32-byte seed, nils the reference to the underlying
+// library key (making it eligible for garbage collection), and marks this
+// key as permanently destroyed. All subsequent Sign/Seed/Equal operations
+// return ErrDestroyed. Calling Destroy multiple times is safe (idempotent).
+//
+// The cached PublicKey remains valid and usable after Destroy. This allows
+// verifying previously-created signatures even after the signing key is
+// discarded.
 func (k *PrivateKey) Destroy() {
 	if k == nil {
 		return
@@ -239,7 +285,9 @@ func (k *PrivateKey) Destroy() {
 	k.key = nil
 }
 
-// Bytes returns a copy of the public key encoding (1952 bytes).
+// Bytes returns a fresh copy of the 1952-byte public key encoding.
+// Each call allocates a new slice; the caller may freely modify it.
+// Returns nil if k is nil.
 func (k *PublicKey) Bytes() []byte {
 	if k == nil {
 		return nil
@@ -247,7 +295,13 @@ func (k *PublicKey) Bytes() []byte {
 	return k.key.Bytes()
 }
 
-// Verify reports whether sig is a valid signature of msg by this public key.
+// Verify reports whether sig is a valid ML-DSA-65 signature of msg under
+// this public key with an empty context string.
+//
+// Returns false if k is nil, if len(sig) != SignatureSize, or if the
+// cryptographic verification fails. There is no distinction between
+// "wrong length" and "wrong signature" from the caller's perspective;
+// both mean "do not trust this signature."
 func (k *PublicKey) Verify(msg, sig []byte) bool {
 	if k == nil {
 		return false
@@ -258,7 +312,12 @@ func (k *PublicKey) Verify(msg, sig []byte) bool {
 	return mldsa.Verify(k.key, msg, sig, nil) == nil
 }
 
-// VerifyWithContext verifies a signature with a context string.
+// VerifyWithContext reports whether sig is a valid signature of msg under
+// this public key with the given context string. The context must match the
+// one used during signing exactly, or verification will fail.
+//
+// A context longer than 255 bytes will always return false (no valid
+// signature can exist for an oversized context because Sign rejects it).
 func (k *PublicKey) VerifyWithContext(msg, sig []byte, ctx string) bool {
 	if k == nil {
 		return false
@@ -269,7 +328,8 @@ func (k *PublicKey) VerifyWithContext(msg, sig []byte, ctx string) bool {
 	return mldsa.Verify(k.key, msg, sig, &mldsa.Options{Context: ctx}) == nil
 }
 
-// Equal reports whether k and x are the same public key.
+// Equal reports whether k and x represent the same public key
+// (constant-time comparison). Returns false if either is nil.
 func (k *PublicKey) Equal(x *PublicKey) bool {
 	if k == nil || x == nil {
 		return false

@@ -148,6 +148,7 @@ defer sk2.Destroy()
 * **All Rust panics are Go errors** - go-clatter never panics on user input
 * **No ML-KEM-512** - Go stdlib `crypto/mlkem` ships 768 and 1024 only (NIST security margin decision)
 * **No cross-vendor KEM tests** - Go has one KEM implementation per key size (stdlib)
+* **ML-DSA-65 signing module** - go-clatter extends beyond handshakes with a standalone FIPS 204 post-quantum signature primitive (`crypto/sign/mldsa65`). Rust Clatter does not include a signing module. This gives Go consumers a complete PQ toolkit in one repository: quantum-resistant key exchange (ML-KEM) AND quantum-resistant signatures (ML-DSA) under one roof.
 
 ## Verification
 
@@ -167,7 +168,7 @@ go test -race -count=1 ./...
 
 * Go 1.26+ (required for `crypto/mlkem`)
 * `golang.org/x/crypto` (ChaCha20-Poly1305, BLAKE2)
-* `filippo.io/mldsa` (ML-DSA-65 signing, pre-release of Go 1.27 `crypto/mldsa`)
+* [`filippo.io/mldsa`](https://pkg.go.dev/filippo.io/mldsa) (ML-DSA-65 signing) - This is the pre-release of Go's upcoming `crypto/mldsa` stdlib package, maintained by [Filippo Valsorda](https://filippo.io) who leads Go's cryptography standard library. The API is designed to be identical to the stdlib version. When `crypto/mldsa` lands in a future Go release (proposal [#77626](https://github.com/golang/go/issues/77626) accepted), the migration is a single import path change with zero code modifications for consumers of this package.
 
 ## Acknowledgments
 
@@ -179,6 +180,8 @@ Thanks also to the projects whose test vector datasets we use to verify correctn
 * [Snow](https://github.com/mcginty/snow) (Rust Noise implementation) - 408 test vectors
 
 And to the authors of the PQNoise paper for the foundational research this library implements.
+
+Thanks to [Filippo Valsorda](https://filippo.io) for [`filippo.io/mldsa`](https://pkg.go.dev/filippo.io/mldsa) - the ML-DSA implementation that powers our signing module. Filippo maintains Go's cryptography standard library and designed this package as the direct precursor to `crypto/mldsa`. His work gives the Go ecosystem production-ready post-quantum signatures years before the stdlib ships them.
 
 ## License
 
