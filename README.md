@@ -17,7 +17,7 @@ Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni
 📖 **Documentation** 📖
 
 * [`pkg.go.dev`](https://pkg.go.dev/github.com/shurlinet/go-clatter) - API reference and type docs
-* [`examples/`](examples/) - Runnable examples for every handshake type
+* [`examples/`](examples/) - Runnable examples for every handshake type and ML-DSA-65 signing
 
 ## Noise Protocol
 
@@ -44,6 +44,14 @@ before any `psk` tokens in the message pattern.
 
 91 handshake patterns. 4 hash functions. 2 AEAD ciphers. 2 KEM sizes.
 
+## Post-Quantum Signing
+
+* **ML-DSA-65** (`crypto/sign/mldsa65`) - FIPS 204 digital signatures (NIST Level 3, ~192-bit security)
+
+Standalone signing module. Not integrated into the Noise handshake - this is a general-purpose signing primitive for application-layer use (agent identity cards, capability tokens, signed manifests, relay admin commands, or any use case requiring post-quantum signatures).
+
+Key sizes: Seed = 32 bytes, Public Key = 1952 bytes, Signature = 3309 bytes.
+
 ## Crypto Primitives
 
 | Primitive | Implementation | Protocol Name |
@@ -57,6 +65,7 @@ before any `psk` tokens in the message pattern.
 | SHA-512 | `crypto/sha512` | `SHA512` |
 | BLAKE2s | `golang.org/x/crypto/blake2s` | `BLAKE2s` |
 | BLAKE2b | `golang.org/x/crypto/blake2b` | `BLAKE2b` |
+| ML-DSA-65 | `filippo.io/mldsa` (FIPS 204) | - |
 
 ## Protocol Naming
 
@@ -108,6 +117,31 @@ alice, _ := clatter.NewHybridHandshake(clatter.PatternHybridXX, true, hybridSuit
 )
 ```
 
+### ML-DSA-65 Signing
+
+```go
+import "github.com/shurlinet/go-clatter/crypto/sign/mldsa65"
+
+// Generate a key pair.
+sk, _ := mldsa65.GenerateKey()
+defer sk.Destroy() // zeros seed on cleanup
+
+// Sign (hedged randomness - recommended for production).
+sig, _ := sk.Sign([]byte("message to sign"))
+
+// Verify.
+ok := sk.PublicKey().Verify([]byte("message to sign"), sig)
+
+// Context separation prevents cross-purpose replay.
+sig, _ = sk.SignWithContext([]byte("data"), "my-app/transfers/v1")
+ok = sk.PublicKey().VerifyWithContext([]byte("data"), sig, "my-app/transfers/v1")
+
+// Seed export/import for key persistence.
+seed, _ := sk.Seed()       // 32 bytes - store securely
+sk2, _ := mldsa65.NewPrivateKeyFromSeed(seed) // reconstruct later
+defer sk2.Destroy()
+```
+
 ## Differences to Rust Clatter
 
 * **CipherSuite struct** instead of generic type parameters - Go's type system favours runtime dispatch
@@ -133,6 +167,7 @@ go test -race -count=1 ./...
 
 * Go 1.26+ (required for `crypto/mlkem`)
 * `golang.org/x/crypto` (ChaCha20-Poly1305, BLAKE2)
+* `filippo.io/mldsa` (ML-DSA-65 signing, pre-release of Go 1.27 `crypto/mldsa`)
 
 ## Acknowledgments
 
