@@ -104,6 +104,10 @@ type HandshakeInternals struct {
 	msgIndex      int
 	protocolName  string
 	handshakeType HandshakeType
+
+	// Per-handshake message length limit (default MaxMessageLen = 65535).
+	// Immutable after construction. Must be in [1, MaxMessageLen].
+	maxMsgLen int
 }
 
 // acquireUse attempts to acquire exclusive access for a handshake operation.
@@ -199,6 +203,7 @@ func (h *HandshakeInternals) Destroy() {
 	h.ekem = nil
 	h.skem = nil
 	h.observer = nil
+	h.maxMsgLen = 0
 }
 
 // notifyMessage delivers a HandshakeEvent to the observer with panic recovery.
@@ -395,6 +400,7 @@ type handshakeOptions struct {
 	prologue        []byte
 	rng             RNG
 	observer        Observer
+	maxMsgLen       int // 0 = default (MaxMessageLen = 65535)
 }
 
 // WithStaticKey sets the local static keypair for the handshake.
@@ -459,6 +465,130 @@ func WithRemoteStaticKEMKey(pub []byte) Option {
 		o.remoteStaticKEM = make([]byte, len(pub))
 		copy(o.remoteStaticKEM, pub)
 	}
+}
+
+// WithMaxMessageLen sets a per-handshake maximum message length.
+// The limit applies to both handshake and transport messages.
+//
+// Valid range: 1 to MaxMessageLen (65535). Zero means default (65535).
+// Values above MaxMessageLen or below zero return an error from the
+// handshake constructor.
+//
+// The constructor validates that maxMsgLen is large enough for every
+// message in the pattern. If any message's overhead exceeds the limit,
+// the constructor returns a descriptive error identifying which message
+// and how many bytes it requires.
+//
+// For DualLayer handshakes, the outer transport tag (16 bytes) is
+// automatically accounted for. The inner handshake's own maxMsgLen
+// is not modified; validation ensures the inner's maximum message
+// plus the tag fits within the DualLayer limit.
+//
+// This limit is immutable after construction.
+func WithMaxMessageLen(n int) Option {
+	return func(o *handshakeOptions) {
+		o.maxMsgLen = n
+	}
+}
+
+// resolveMaxMsgLen validates and resolves the maxMsgLen option value.
+// Returns MaxMessageLen (65535) for zero. Returns error for negative or > MaxMessageLen.
+func resolveMaxMsgLen(n int) (int, error) {
+	if n == 0 {
+		return MaxMessageLen, nil
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("%w: maxMsgLen must be non-negative, got %d", ErrInvalidPattern, n)
+	}
+	if n > MaxMessageLen {
+		return 0, fmt.Errorf("%w: maxMsgLen %d exceeds Noise spec maximum %d",
+			ErrInvalidPattern, n, MaxMessageLen)
+	}
+	return n, nil
+}
+
+// tokenOverheadFunc computes the wire overhead for a single token.
+// hasKey is the current symmetric state key status (mutated by the caller).
+type tokenOverheadFunc func(token Token, hasKey *bool) int
+
+// validatePatternMaxMsgLen walks ALL messages in the pattern, simulates HasKey
+// evolution, computes the maximum overhead for each message, and returns an error
+// if any message's overhead (without payload) exceeds maxMsgLen.
+//
+// This catches misconfiguration at construction time rather than at the first
+// WriteMessage/ReadMessage call, producing a descriptive error message identifying
+// which message is too large and how many bytes it requires.
+func validatePatternMaxMsgLen(pattern *HandshakePattern, maxMsgLen int, tokenOverhead tokenOverheadFunc) error {
+	// Walk the interleaved message sequence: initiator[0], responder[0], initiator[1], ...
+	initIdx := 0
+	respIdx := 0
+	msgNum := 0
+	initiatorTurn := true
+
+	// Pre-message E with PSK establishes HasKey before the first message body.
+	// Compute initial HasKey state from pre-messages.
+	hasKey := false
+	if pattern.HasPSK() {
+		preInit := pattern.PreInitiator()
+		for _, t := range preInit {
+			if t == TokenE {
+				hasKey = true
+				break
+			}
+		}
+		if !hasKey {
+			preResp := pattern.PreResponder()
+			for _, t := range preResp {
+				if t == TokenE {
+					hasKey = true
+					break
+				}
+			}
+		}
+	}
+
+	for initIdx < pattern.numInitiator || respIdx < pattern.numResponder {
+		var tokens []Token
+		var role string
+
+		if initiatorTurn && initIdx < pattern.numInitiator {
+			msg := &pattern.initiatorMsgs[initIdx]
+			tokens = msg.tokens[:msg.count]
+			role = "initiator"
+			initIdx++
+		} else if !initiatorTurn && respIdx < pattern.numResponder {
+			msg := &pattern.responderMsgs[respIdx]
+			tokens = msg.tokens[:msg.count]
+			role = "responder"
+			respIdx++
+		} else {
+			// Toggle for patterns with unequal message counts
+			initiatorTurn = !initiatorTurn
+			continue
+		}
+
+		overhead := 0
+		simKey := hasKey
+		for _, token := range tokens {
+			overhead += tokenOverhead(token, &simKey)
+		}
+		// Payload tag when key is established
+		if simKey {
+			overhead += TagLen
+		}
+
+		if overhead > maxMsgLen {
+			return fmt.Errorf("%w: maxMsgLen %d too small for %s message %d (requires %d bytes overhead)",
+				ErrInvalidPattern, maxMsgLen, role, msgNum, overhead)
+		}
+
+		// Propagate HasKey state for subsequent messages
+		hasKey = simKey
+		msgNum++
+		initiatorTurn = !initiatorTurn
+	}
+
+	return nil
 }
 
 // applyOptions processes functional options into a handshakeOptions struct.

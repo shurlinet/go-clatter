@@ -30,6 +30,7 @@ type DualLayerHandshake struct {
 	initiator      bool
 	observer       Observer // DualLayer-level observer
 	msgIndex       int      // continuous across outer+inner phases
+	maxMsgLen      int      // DualLayer-level message limit (0 = MaxMessageLen)
 }
 
 // NewDualLayerHandshake creates a dual-layer handshake.
@@ -37,11 +38,14 @@ type DualLayerHandshake struct {
 // bufSize is the intermediate decrypt buffer size. Must be large enough for
 // all inner handshake messages (calculated at runtime).
 //
-// Options: Only WithObserver is applicable. Other options are ignored.
+// Options: WithObserver and WithMaxMessageLen are applicable. Other options
+// are ignored. WithMaxMessageLen sets the DualLayer-level limit; the inner
+// handshake's own maxMsgLen is not modified.
 //
 // Returns error if:
-// - outer and inner have different roles (both must be initiator or both responder)
-// - outer is a one-way pattern (Rust asserts this)
+//   - outer and inner have different roles (both must be initiator or both responder)
+//   - outer is a one-way pattern (Rust asserts this)
+//   - maxMsgLen is negative or exceeds MaxMessageLen
 func NewDualLayerHandshake(outer, inner Handshaker, bufSize int, opts ...Option) (*DualLayerHandshake, error) {
 	return newDualLayerGeneric(outer, inner, bufSize, opts...)
 }
@@ -62,12 +66,32 @@ func newDualLayerGeneric(outer, inner Handshaker, bufSize int, opts ...Option) (
 
 	ho := applyOptions(opts)
 
+	maxMsgLen, err := resolveMaxMsgLen(ho.maxMsgLen)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate: inner's maxMsgLen + outer transport tag must fit within DualLayer limit.
+	// During inner phase, every inner message is wrapped by outer transport encryption
+	// which adds TagLen (16) bytes. Only validate when a custom (non-default) limit is set,
+	// because the default case (both 65535) is architecturally correct - the DualLayer
+	// WriteMessage check enforces the composite limit at runtime.
+	if maxMsgLen < MaxMessageLen {
+		innerMax := getMaxMsgLen(inner)
+		if innerMax+TagLen > maxMsgLen {
+			return nil, fmt.Errorf("%w: maxMsgLen %d too small for inner messages: "+
+				"inner maxMsgLen %d + outer tag %d = %d bytes required",
+				ErrInvalidPattern, maxMsgLen, innerMax, TagLen, innerMax+TagLen)
+		}
+	}
+
 	return &DualLayerHandshake{
 		outer:        outer,
 		inner:        inner,
 		outerRecvBuf: make([]byte, bufSize),
 		initiator:    outerInit,
 		observer:     ho.observer,
+		maxMsgLen:    maxMsgLen,
 	}, nil
 }
 
@@ -97,6 +121,25 @@ func getPattern(h Handshaker) *HandshakePattern {
 		return hs.pattern
 	default:
 		return nil
+	}
+}
+
+// getMaxMsgLen extracts the maxMsgLen from any Handshaker via type assertion.
+// Falls back to MaxMessageLen (65535) for unknown types.
+func getMaxMsgLen(h Handshaker) int {
+	switch hs := h.(type) {
+	case *NqHandshake:
+		return hs.maxMsgLen
+	case *PqHandshake:
+		return hs.maxMsgLen
+	case *HybridHandshake:
+		return hs.maxMsgLen
+	case *DualLayerHandshake:
+		return hs.maxMsgLen
+	case *HybridDualLayerHandshake:
+		return hs.dl.maxMsgLen
+	default:
+		return MaxMessageLen
 	}
 }
 
@@ -160,19 +203,19 @@ func (dl *DualLayerHandshake) updateOuterState() error {
 // During outer phase: delegates to outer handshaker.
 // During inner phase: inner writes to out, then outer transport encrypts in-place.
 // Buffer must account for inner message + outer transport tag.
-// MaxMessageLen checked at this layer (Rust traits.rs wrapper does the same).
+// Message length checked at this layer against dl.maxMsgLen.
 func (dl *DualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if dl.finalized {
 		return 0, ErrAlreadyFinished
 	}
 	if dl.outerFinished {
-		// Check total output won't exceed MaxMessageLen
+		// Check total output won't exceed DualLayer limit
 		overhead, err := dl.GetNextMessageOverhead()
 		if err != nil {
 			return 0, err
 		}
 		totalNeeded := len(payload) + overhead
-		if totalNeeded > MaxMessageLen {
+		if totalNeeded > dl.maxMsgLen {
 			return 0, ErrMessageTooLarge
 		}
 		// Check output buffer can hold inner message + outer transport tag
@@ -325,6 +368,9 @@ func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 		return nil, err
 	}
 
+	// Set returned TransportState's maxMsgLen to DualLayer's limit
+	ts.maxMsgLen = dl.maxMsgLen
+
 	// Fire DualLayer IsComplete event
 	dl.dlNotifyMessage(HandshakeEvent{
 		MessageIndex:  dl.msgIndex,
@@ -347,6 +393,7 @@ func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 
 	dl.finalized = true
 	dl.observer = nil
+	dl.maxMsgLen = 0
 	return ts, nil
 }
 
@@ -398,6 +445,7 @@ func (dl *DualLayerHandshake) Destroy() {
 	}
 	zeroSlice(dl.outerRecvBuf)
 	dl.observer = nil
+	dl.maxMsgLen = 0
 	dl.finalized = true // prevent use after destroy
 }
 
@@ -483,19 +531,19 @@ func (hdl *HybridDualLayerHandshake) updateOuterState() error {
 }
 
 // WriteMessage writes the next handshake message.
-// MaxMessageLen checked at this layer.
+// Message length checked at this layer against dl.maxMsgLen.
 func (hdl *HybridDualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 	if hdl.dl.finalized {
 		return 0, ErrAlreadyFinished
 	}
 	if hdl.dl.outerFinished {
-		// Check total output won't exceed MaxMessageLen
+		// Check total output won't exceed DualLayer limit
 		overhead, err := hdl.GetNextMessageOverhead()
 		if err != nil {
 			return 0, err
 		}
 		totalNeeded := len(payload) + overhead
-		if totalNeeded > MaxMessageLen {
+		if totalNeeded > hdl.dl.maxMsgLen {
 			return 0, ErrMessageTooLarge
 		}
 		if len(out) < totalNeeded {
@@ -618,6 +666,9 @@ func (hdl *HybridDualLayerHandshake) Finalize() (*TransportState, error) {
 		return nil, err
 	}
 
+	// Set returned TransportState's maxMsgLen to DualLayer's limit
+	ts.maxMsgLen = hdl.dl.maxMsgLen
+
 	// Fire HybridDualLayer IsComplete event
 	hdl.dl.dlNotifyMessage(HandshakeEvent{
 		MessageIndex:  hdl.dl.msgIndex,
@@ -636,6 +687,7 @@ func (hdl *HybridDualLayerHandshake) Finalize() (*TransportState, error) {
 	zeroSlice(hdl.dl.outerRecvBuf)
 	hdl.dl.finalized = true
 	hdl.dl.observer = nil
+	hdl.dl.maxMsgLen = 0
 	return ts, nil
 }
 

@@ -28,5 +28,13 @@
 //
 // The Noise specification mandates a maximum message length of 65535 bytes
 // (MaxMessageLen). Per-handshake limits can be configured via WithMaxMessageLen
-// (planned for v0.3.0 Batch 2) to support constrained environments.
+// to enforce smaller limits for constrained environments, security policy, or
+// memory exhaustion defense. Zero or unset means the default (65535). Values
+// above MaxMessageLen are rejected at construction time.
+//
+// The limit applies to both handshake messages and post-handshake transport
+// messages. Handshake constructors validate that the limit is large enough for
+// every message in the pattern, returning a descriptive error if not.
+// TransportState inherits the limit from the handshake that created it.
+// Use TransportState.MaxMessageLen() to query the active limit.
 package clatter

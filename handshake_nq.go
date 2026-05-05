@@ -44,12 +44,19 @@ func NewNqHandshake(
 		rng = rand.Reader
 	}
 
+	// Resolve max message length
+	maxMsgLen, err := resolveMaxMsgLen(ho.maxMsgLen)
+	if err != nil {
+		return nil, err
+	}
+
 	hs := &NqHandshake{dh: suite.DH}
 	hs.pattern = pattern
 	hs.initiator = initiator
 	hs.rng = rng
 	hs.cipher = suite.Cipher
 	hs.hash = suite.Hash
+	hs.maxMsgLen = maxMsgLen
 
 	// Build protocol name and initialize symmetric state
 	name := nqBuildName(pattern, suite)
@@ -74,6 +81,36 @@ func NewNqHandshake(
 	// Set remote static public key
 	if ho.remoteStatic != nil {
 		hs.rs = &KeyPair{Public: ho.remoteStatic}
+	}
+
+	// Validate maxMsgLen is large enough for every message in the pattern
+	if maxMsgLen < MaxMessageLen {
+		dhPubLen := suite.DH.PubKeyLen()
+		hasPSK := pattern.HasPSK()
+		if err := validatePatternMaxMsgLen(pattern, maxMsgLen, func(token Token, hasKey *bool) int {
+			switch token {
+			case TokenE:
+				if hasPSK {
+					*hasKey = true
+				}
+				return dhPubLen
+			case TokenS:
+				n := dhPubLen
+				if *hasKey {
+					n += TagLen
+				}
+				return n
+			case TokenEE, TokenES, TokenSE, TokenSS:
+				*hasKey = true
+				return 0
+			case TokenPsk:
+				*hasKey = true
+				return 0
+			}
+			return 0
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Process pre-messages (pre-message E has different mix logic than message-body E)
@@ -210,7 +247,7 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 		return 0, err
 	}
 	needed := overhead + len(payload)
-	if needed > MaxMessageLen {
+	if needed > hs.maxMsgLen {
 		err = ErrMessageTooLarge
 		hs.setError(err)
 		return 0, err
@@ -300,7 +337,7 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 		hs.setError(err)
 		return 0, err
 	}
-	if len(message) > MaxMessageLen {
+	if len(message) > hs.maxMsgLen {
 		err = ErrMessageTooLarge
 		hs.setError(err)
 		return 0, err
@@ -396,7 +433,7 @@ func (hs *NqHandshake) Finalize() (*TransportState, error) {
 	}
 
 	h := hs.symmetricState.GetHandshakeHash()
-	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
+	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator, hs.maxMsgLen)
 
 	// Notify observer IsComplete BEFORE Destroy
 	hs.notifyMessage(HandshakeEvent{

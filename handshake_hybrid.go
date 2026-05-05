@@ -57,6 +57,12 @@ func NewHybridHandshake(
 		rng = rand.Reader
 	}
 
+	// Resolve max message length
+	maxMsgLen, err := resolveMaxMsgLen(ho.maxMsgLen)
+	if err != nil {
+		return nil, err
+	}
+
 	hs := &HybridHandshake{dh: suite.DH}
 	hs.pattern = pattern
 	hs.initiator = initiator
@@ -65,6 +71,7 @@ func NewHybridHandshake(
 	hs.hash = suite.Hash
 	hs.ekem = suite.EKEM
 	hs.skem = suite.SKEM
+	hs.maxMsgLen = maxMsgLen
 
 	// Build protocol name and initialize symmetric state
 	name := hybridBuildName(pattern, suite)
@@ -92,6 +99,50 @@ func NewHybridHandshake(
 	}
 	if ho.remoteStaticKEM != nil {
 		hs.kemRS = &KeyPair{Public: ho.remoteStaticKEM}
+	}
+
+	// Validate maxMsgLen is large enough for every message in the pattern
+	if maxMsgLen < MaxMessageLen {
+		hasPSK := pattern.HasPSK()
+		dhPubLen := suite.DH.PubKeyLen()
+		ekemPubLen := suite.EKEM.PubKeyLen()
+		skemPubLen := suite.SKEM.PubKeyLen()
+		ekemCtLen := suite.EKEM.CiphertextLen()
+		skemCtLen := suite.SKEM.CiphertextLen()
+		if err := validatePatternMaxMsgLen(pattern, maxMsgLen, func(token Token, hasKey *bool) int {
+			switch token {
+			case TokenE:
+				if hasPSK {
+					*hasKey = true
+				}
+				return dhPubLen + ekemPubLen
+			case TokenS:
+				n := dhPubLen + skemPubLen
+				if *hasKey {
+					n += TagLen * 2 // one tag per pubkey
+				}
+				return n
+			case TokenEE, TokenES, TokenSE, TokenSS:
+				*hasKey = true
+				return 0
+			case TokenEkem:
+				*hasKey = true
+				return ekemCtLen
+			case TokenSkem:
+				n := skemCtLen
+				if *hasKey {
+					n += TagLen
+				}
+				*hasKey = true
+				return n
+			case TokenPsk:
+				*hasKey = true
+				return 0
+			}
+			return 0
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Process pre-messages.
@@ -225,7 +276,7 @@ func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 		return 0, err
 	}
 	needed := overhead + len(payload)
-	if needed > MaxMessageLen {
+	if needed > hs.maxMsgLen {
 		err = ErrMessageTooLarge
 		hs.setError(err)
 		return 0, err
@@ -312,7 +363,7 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 		hs.setError(err)
 		return 0, err
 	}
-	if len(message) > MaxMessageLen {
+	if len(message) > hs.maxMsgLen {
 		err = ErrMessageTooLarge
 		hs.setError(err)
 		return 0, err
@@ -416,7 +467,7 @@ func (hs *HybridHandshake) Finalize() (*TransportState, error) {
 	}
 
 	h := hs.symmetricState.GetHandshakeHash()
-	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
+	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator, hs.maxMsgLen)
 
 	// Notify observer IsComplete BEFORE Destroy
 	hs.notifyMessage(HandshakeEvent{

@@ -15,31 +15,44 @@ type TransportState struct {
 	responderToInitiator *CipherState
 	pattern              *HandshakePattern
 	h                    []byte // handshake hash (for dual-layer binding)
+	maxMsgLen            int    // per-session message length limit
 	initiator            bool
 	destroyed            bool
 }
 
 // newTransportState creates a TransportState from a completed handshake's components.
-func newTransportState(cs1, cs2 *CipherState, pattern *HandshakePattern, h []byte, initiator bool) *TransportState {
+func newTransportState(cs1, cs2 *CipherState, pattern *HandshakePattern, h []byte, initiator bool, maxMsgLen int) *TransportState {
 	return &TransportState{
 		initiatorToResponder: cs1,
 		responderToInitiator: cs2,
 		pattern:              pattern,
 		h:                    h,
+		maxMsgLen:            maxMsgLen,
 		initiator:            initiator,
 	}
 }
 
+// MaxMessageLen returns the per-session message length limit.
+// Returns 0 if the TransportState is nil or destroyed.
+func (ts *TransportState) MaxMessageLen() int {
+	if ts == nil || ts.destroyed {
+		return 0
+	}
+	return ts.maxMsgLen
+}
+
 // Send encrypts payload for sending to the remote party.
-// Returns error when payload + tag exceeds MaxMessageLen, or when a
-// responder attempts to send on a one-way pattern.
+// Returns error when payload + tag exceeds the session message length limit,
+// or when a responder attempts to send on a one-way pattern.
+// If the payload is too large, the caller must fragment at the application
+// layer. TransportState does not perform fragmentation.
 func (ts *TransportState) Send(payload, out []byte) (int, error) {
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
 
 	outLen := len(payload) + TagLen
-	if outLen > MaxMessageLen {
+	if outLen > ts.maxMsgLen {
 		return 0, ErrMessageTooLarge
 	}
 	if len(out) < outLen {
@@ -74,7 +87,7 @@ func (ts *TransportState) SendInPlace(msg []byte, msgLen int) (int, error) {
 	}
 
 	outLen := msgLen + TagLen
-	if outLen > MaxMessageLen {
+	if outLen > ts.maxMsgLen {
 		return 0, ErrMessageTooLarge
 	}
 	if len(msg) < outLen {
@@ -94,8 +107,8 @@ func (ts *TransportState) SendInPlace(msg []byte, msgLen int) (int, error) {
 }
 
 // Receive decrypts a message from the remote party.
-// Returns error when message exceeds MaxMessageLen, or when an initiator
-// attempts to receive on a one-way pattern.
+// Returns error when message exceeds the session message length limit,
+// or when an initiator attempts to receive on a one-way pattern.
 func (ts *TransportState) Receive(message, out []byte) (int, error) {
 	if ts.destroyed {
 		return 0, ErrDestroyed
@@ -104,7 +117,7 @@ func (ts *TransportState) Receive(message, out []byte) (int, error) {
 	if len(message) < TagLen {
 		return 0, fmt.Errorf("%w: message too short", ErrInvalidMessage)
 	}
-	if len(message) > MaxMessageLen {
+	if len(message) > ts.maxMsgLen {
 		return 0, ErrMessageTooLarge
 	}
 
@@ -139,7 +152,7 @@ func (ts *TransportState) ReceiveInPlace(msg []byte, msgLen int) (int, error) {
 	if msgLen < TagLen {
 		return 0, fmt.Errorf("%w: message too short", ErrInvalidMessage)
 	}
-	if msgLen > MaxMessageLen {
+	if msgLen > ts.maxMsgLen {
 		return 0, ErrMessageTooLarge
 	}
 	if msgLen > len(msg) {
@@ -234,6 +247,7 @@ func (ts *TransportState) Take() (initiatorToResponder, responderToInitiator *Ci
 	ts.destroyed = true
 	zeroSlice(ts.h)
 	ts.h = nil
+	ts.maxMsgLen = 0
 	return i2r, r2i
 }
 
@@ -249,6 +263,7 @@ func (ts *TransportState) Destroy() {
 	}
 	zeroSlice(ts.h)
 	ts.h = nil
+	ts.maxMsgLen = 0
 	ts.destroyed = true
 }
 
