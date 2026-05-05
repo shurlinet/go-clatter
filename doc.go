@@ -14,4 +14,19 @@
 // All secret key material is stored in fixed-size arrays ([32]byte, [64]byte)
 // that don't move during garbage collection. Every type holding secrets
 // implements Destroy() for explicit zeroing.
+//
+// # Observability
+//
+// Attach an Observer via WithObserver to receive HandshakeEvent notifications
+// after each handshake message (Write/Read) and on Finalize (IsComplete=true).
+// Error events are delivered via OnError when the handshake enters error state.
+// A nil observer has zero overhead (nil check only). Observer callbacks execute
+// on the handshake goroutine and must return quickly. Panics in OnMessage are
+// recovered and forwarded to OnError; panics in OnError are silently discarded.
+//
+// # Message Length Limits
+//
+// The Noise specification mandates a maximum message length of 65535 bytes
+// (MaxMessageLen). Per-handshake limits can be configured via WithMaxMessageLen
+// (planned for v0.3.0 Batch 2) to support constrained environments.
 package clatter

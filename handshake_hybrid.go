@@ -69,6 +69,9 @@ func NewHybridHandshake(
 	// Build protocol name and initialize symmetric state
 	name := hybridBuildName(pattern, suite)
 	hs.symmetricState = InitializeSymmetric(suite.Hash, suite.Cipher, name)
+	hs.protocolName = name
+	hs.handshakeType = TypeHybrid
+	hs.observer = ho.observer
 
 	// Mix prologue (Noise spec: always mixed, even if empty)
 	hs.symmetricState.MixHash(ho.prologue)
@@ -267,6 +270,18 @@ func (hs *HybridHandshake) WriteMessage(payload, out []byte) (int, error) {
 
 	hs.updateStatus()
 
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:  hs.msgIndex,
+		Direction:     Sent,
+		Phase:         SinglePhase,
+		HandshakeType: TypeHybrid,
+		IsInitiator:   hs.initiator,
+		ProtocolName:  hs.protocolName,
+		HandshakeHash: hs.GetHandshakeHash(),
+		PayloadLen:    len(payload),
+	})
+	hs.msgIndex++
+
 	return offset, nil
 }
 
@@ -310,6 +325,12 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 		return 0, err
 	}
 
+	// Snapshot remote keys before token processing
+	preRE := hs.re
+	preRS := hs.rs
+	preKemRE := hs.kemRE
+	preKemRS := hs.kemRS
+
 	// Stateful message parser
 	reader := newMessageReader(message)
 
@@ -340,6 +361,36 @@ func (hs *HybridHandshake) ReadMessage(message, out []byte) (int, error) {
 
 	hs.updateStatus()
 
+	// Detect learned keys (nil->non-nil transition)
+	var learnedRE, learnedRS, learnedKemRE, learnedKemRS []byte
+	if preRE == nil && hs.re != nil {
+		learnedRE = copyBytes(hs.re.Public)
+	}
+	if preRS == nil && hs.rs != nil {
+		learnedRS = copyBytes(hs.rs.Public)
+	}
+	if preKemRE == nil && hs.kemRE != nil {
+		learnedKemRE = copyBytes(hs.kemRE.Public)
+	}
+	if preKemRS == nil && hs.kemRS != nil {
+		learnedKemRS = copyBytes(hs.kemRS.Public)
+	}
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:       hs.msgIndex,
+		Direction:          Received,
+		Phase:              SinglePhase,
+		HandshakeType:      TypeHybrid,
+		IsInitiator:        hs.initiator,
+		ProtocolName:       hs.protocolName,
+		HandshakeHash:      hs.GetHandshakeHash(),
+		PayloadLen:         payloadLen,
+		RemoteEphemeralDH:  learnedRE,
+		RemoteStaticDH:     learnedRS,
+		RemoteEphemeralKEM: learnedKemRE,
+		RemoteStaticKEM:    learnedKemRS,
+	})
+	hs.msgIndex++
+
 	return payloadLen, nil
 }
 
@@ -366,6 +417,18 @@ func (hs *HybridHandshake) Finalize() (*TransportState, error) {
 
 	h := hs.symmetricState.GetHandshakeHash()
 	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
+
+	// Notify observer IsComplete BEFORE Destroy
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:  hs.msgIndex,
+		Direction:     Sent,
+		Phase:         SinglePhase,
+		HandshakeType: TypeHybrid,
+		IsInitiator:   hs.initiator,
+		ProtocolName:  hs.protocolName,
+		HandshakeHash: copyBytes(h),
+		IsComplete:    true,
+	})
 
 	hs.finalized = true
 	// Zero ALL handshake state after finalize

@@ -17,7 +17,7 @@ Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni
 📖 **Documentation** 📖
 
 * [`pkg.go.dev`](https://pkg.go.dev/github.com/shurlinet/go-clatter) - API reference and type docs
-* [`examples/`](examples/) - Runnable examples for every handshake type and ML-DSA-65 signing
+* [`examples/`](examples/) - Runnable examples for every handshake type, observer callbacks, and ML-DSA-65 signing
 
 ## Noise Protocol
 
@@ -141,6 +141,29 @@ seed, _ := sk.Seed()       // 32 bytes - store securely
 sk2, _ := mldsa65.NewPrivateKeyFromSeed(seed) // reconstruct later
 defer sk2.Destroy()
 ```
+
+## Observability
+
+Attach an `Observer` to any handshake to receive real-time notifications about message processing, key exchange events, and errors:
+
+```go
+type myObserver struct{}
+
+func (o *myObserver) OnMessage(e clatter.HandshakeEvent) {
+    fmt.Printf("[msg %d] %s type=%s payload=%d bytes\n",
+        e.MessageIndex, e.Direction, e.HandshakeType, e.PayloadLen)
+}
+func (o *myObserver) OnError(e clatter.HandshakeErrorEvent) {
+    fmt.Printf("[msg %d] ERROR: %v\n", e.MessageIndex, e.Err)
+}
+
+alice, _ := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
+    clatter.WithStaticKey(aliceKeys),
+    clatter.WithObserver(&myObserver{}),
+)
+```
+
+Observer events report learned remote keys (DH and KEM), handshake hash, protocol name, phase (for dual-layer), and completion status. A nil observer has zero overhead. Panics in observer callbacks are recovered. See [`examples/observer/`](examples/observer/) and the [Observer godoc](https://pkg.go.dev/github.com/shurlinet/go-clatter#Observer).
 
 ## Differences to Rust Clatter
 

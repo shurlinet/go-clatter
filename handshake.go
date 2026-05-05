@@ -98,6 +98,12 @@ type HandshakeInternals struct {
 	// KEM fields (used by PQ and Hybrid) - set by handshake constructors
 	ekem KEM // ephemeral KEM
 	skem KEM // static KEM
+
+	// Observer fields
+	observer      Observer
+	msgIndex      int
+	protocolName  string
+	handshakeType HandshakeType
 }
 
 // acquireUse attempts to acquire exclusive access for a handshake operation.
@@ -128,7 +134,24 @@ func (h *HandshakeInternals) checkState() error {
 
 // setError records an error and zeros all cryptographic state immediately.
 // After this call, status is Error and all secrets are zeroed. No recovery.
+// Notifies observer BEFORE zeroing so msgIndex is still readable.
 func (h *HandshakeInternals) setError(err error) {
+	// Infer direction from current status for error event
+	dir := Sent
+	if h.status == StatusReceive {
+		dir = Received
+	}
+
+	// Notify observer before zeroing state
+	h.notifyError(HandshakeErrorEvent{
+		MessageIndex:  h.msgIndex,
+		Direction:     dir,
+		Phase:         SinglePhase,
+		HandshakeType: h.handshakeType,
+		IsInitiator:   h.initiator,
+		Err:           err,
+	})
+
 	h.status = StatusError
 	if h.symmetricState != nil {
 		h.symmetricState.SetError(err)
@@ -175,6 +198,44 @@ func (h *HandshakeInternals) Destroy() {
 	h.rng = nil
 	h.ekem = nil
 	h.skem = nil
+	h.observer = nil
+}
+
+// notifyMessage delivers a HandshakeEvent to the observer with panic recovery.
+// Zero cost when observer is nil (nil check only, no allocation).
+// Uses double-recover pattern: if OnMessage panics, tries OnError with panic
+// info. If OnError also panics, silently discards.
+func (h *HandshakeInternals) notifyMessage(event HandshakeEvent) {
+	if h.observer == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			// OnMessage panicked. Try to deliver error event.
+			func() {
+				defer func() { recover() }() // discard OnError panic
+				h.observer.OnError(HandshakeErrorEvent{
+					MessageIndex:  event.MessageIndex,
+					Direction:     event.Direction,
+					Phase:         event.Phase,
+					HandshakeType: event.HandshakeType,
+					IsInitiator:   event.IsInitiator,
+					Err:           fmt.Errorf("clatter: observer OnMessage panic: %v", r),
+				})
+			}()
+		}
+	}()
+	h.observer.OnMessage(event)
+}
+
+// notifyError delivers a HandshakeErrorEvent to the observer with panic recovery.
+// Zero cost when observer is nil.
+func (h *HandshakeInternals) notifyError(event HandshakeErrorEvent) {
+	if h.observer == nil {
+		return
+	}
+	defer func() { recover() }() // discard OnError panic
+	h.observer.OnError(event)
 }
 
 // IsFinished returns true when the handshake is complete.
@@ -333,6 +394,7 @@ type handshakeOptions struct {
 	remoteStaticKEM []byte   // Hybrid: remote static KEM public key
 	prologue        []byte
 	rng             RNG
+	observer        Observer
 }
 
 // WithStaticKey sets the local static keypair for the handshake.

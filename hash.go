@@ -136,3 +136,13 @@ func zeroSlice(b []byte) {
 		b[i] = 0
 	}
 }
+
+// copyBytes returns a fresh copy of b. Returns nil if b is nil.
+func copyBytes(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
+}

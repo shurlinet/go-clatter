@@ -28,6 +28,8 @@ type DualLayerHandshake struct {
 	finalized      bool   // guards against double-finalize
 	outerRecvBuf   []byte // sized to max inner message
 	initiator      bool
+	observer       Observer // DualLayer-level observer
+	msgIndex       int      // continuous across outer+inner phases
 }
 
 // NewDualLayerHandshake creates a dual-layer handshake.
@@ -35,15 +37,17 @@ type DualLayerHandshake struct {
 // bufSize is the intermediate decrypt buffer size. Must be large enough for
 // all inner handshake messages (calculated at runtime).
 //
+// Options: Only WithObserver is applicable. Other options are ignored.
+//
 // Returns error if:
 // - outer and inner have different roles (both must be initiator or both responder)
 // - outer is a one-way pattern (Rust asserts this)
-func NewDualLayerHandshake(outer, inner Handshaker, bufSize int) (*DualLayerHandshake, error) {
-	return newDualLayerGeneric(outer, inner, bufSize)
+func NewDualLayerHandshake(outer, inner Handshaker, bufSize int, opts ...Option) (*DualLayerHandshake, error) {
+	return newDualLayerGeneric(outer, inner, bufSize, opts...)
 }
 
 // newDualLayerGeneric creates a dual-layer handshake validating role parity and one-way.
-func newDualLayerGeneric(outer, inner Handshaker, bufSize int) (*DualLayerHandshake, error) {
+func newDualLayerGeneric(outer, inner Handshaker, bufSize int, opts ...Option) (*DualLayerHandshake, error) {
 	outerInit := getInitiator(outer)
 	innerInit := getInitiator(inner)
 
@@ -56,11 +60,14 @@ func newDualLayerGeneric(outer, inner Handshaker, bufSize int) (*DualLayerHandsh
 		return nil, fmt.Errorf("%w: outer handshake must not be a one-way pattern", ErrInvalidPattern)
 	}
 
+	ho := applyOptions(opts)
+
 	return &DualLayerHandshake{
 		outer:        outer,
 		inner:        inner,
 		outerRecvBuf: make([]byte, bufSize),
 		initiator:    outerInit,
+		observer:     ho.observer,
 	}, nil
 }
 
@@ -93,6 +100,38 @@ func getPattern(h Handshaker) *HandshakePattern {
 	}
 }
 
+// dlNotifyMessage delivers a HandshakeEvent to the DualLayer observer with panic recovery.
+func (dl *DualLayerHandshake) dlNotifyMessage(event HandshakeEvent) {
+	if dl.observer == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			func() {
+				defer func() { recover() }()
+				dl.observer.OnError(HandshakeErrorEvent{
+					MessageIndex:  event.MessageIndex,
+					Direction:     event.Direction,
+					Phase:         event.Phase,
+					HandshakeType: event.HandshakeType,
+					IsInitiator:   event.IsInitiator,
+					Err:           fmt.Errorf("clatter: observer OnMessage panic: %v", r),
+				})
+			}()
+		}
+	}()
+	dl.observer.OnMessage(event)
+}
+
+// dlNotifyError delivers a HandshakeErrorEvent to the DualLayer observer with panic recovery.
+func (dl *DualLayerHandshake) dlNotifyError(event HandshakeErrorEvent) {
+	if dl.observer == nil {
+		return
+	}
+	defer func() { recover() }()
+	dl.observer.OnError(event)
+}
+
 // OuterCompleted returns true when the outer handshake has finished.
 func (dl *DualLayerHandshake) OuterCompleted() bool {
 	return dl.outerFinished
@@ -108,6 +147,7 @@ func (dl *DualLayerHandshake) updateOuterState() error {
 		// Keeping a reference to a poisoned handshaker causes confusion.
 		dl.outer = nil
 		if err != nil {
+			dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Sent, Phase: OuterPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 			return err
 		}
 		dl.outerTransport = ts
@@ -143,21 +183,42 @@ func (dl *DualLayerHandshake) WriteMessage(payload, out []byte) (int, error) {
 		// Inner phase: inner writes, outer encrypts in-place
 		n, err := dl.inner.WriteMessage(payload, out)
 		if err != nil {
+			dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 			return 0, err
 		}
-		// Bounds check before SendInPlace
 		n, err = dl.outerTransport.SendInPlace(out, n)
 		if err != nil {
+			dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 			return 0, err
 		}
+		dl.dlNotifyMessage(HandshakeEvent{
+			MessageIndex:  dl.msgIndex,
+			Direction:     Sent,
+			Phase:         InnerPhase,
+			HandshakeType: TypeDualLayer,
+			IsInitiator:   dl.initiator,
+			PayloadLen:    len(payload),
+		})
+		dl.msgIndex++
 		return n, nil
 	}
 
 	// Outer phase: delegate to outer
 	n, err := dl.outer.WriteMessage(payload, out)
 	if err != nil {
+		dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Sent, Phase: OuterPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 		return 0, err
 	}
+	// Fire DualLayer observer on outer phase
+	dl.dlNotifyMessage(HandshakeEvent{
+		MessageIndex:  dl.msgIndex,
+		Direction:     Sent,
+		Phase:         OuterPhase,
+		HandshakeType: TypeDualLayer,
+		IsInitiator:   dl.initiator,
+		PayloadLen:    len(payload),
+	})
+	dl.msgIndex++
 	// updateOuterState after write
 	if err := dl.updateOuterState(); err != nil {
 		return 0, err
@@ -176,22 +237,42 @@ func (dl *DualLayerHandshake) ReadMessage(message, out []byte) (int, error) {
 		// Inner phase: outer decrypts, inner reads
 		n, err := dl.outerTransport.Receive(message, dl.outerRecvBuf)
 		if err != nil {
+			dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Received, Phase: InnerPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 			return 0, err
 		}
 		payloadN, readErr := dl.inner.ReadMessage(dl.outerRecvBuf[:n], out)
-		// Zero decrypted inner message from buffer immediately after inner reads
 		zeroSlice(dl.outerRecvBuf[:n])
 		if readErr != nil {
+			dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Received, Phase: InnerPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: readErr})
 			return 0, readErr
 		}
+		dl.dlNotifyMessage(HandshakeEvent{
+			MessageIndex:  dl.msgIndex,
+			Direction:     Received,
+			Phase:         InnerPhase,
+			HandshakeType: TypeDualLayer,
+			IsInitiator:   dl.initiator,
+			PayloadLen:    payloadN,
+		})
+		dl.msgIndex++
 		return payloadN, nil
 	}
 
 	// Outer phase: delegate to outer
 	n, err := dl.outer.ReadMessage(message, out)
 	if err != nil {
+		dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Received, Phase: OuterPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 		return 0, err
 	}
+	dl.dlNotifyMessage(HandshakeEvent{
+		MessageIndex:  dl.msgIndex,
+		Direction:     Received,
+		Phase:         OuterPhase,
+		HandshakeType: TypeDualLayer,
+		IsInitiator:   dl.initiator,
+		PayloadLen:    n,
+	})
+	dl.msgIndex++
 	// updateOuterState after read
 	if err := dl.updateOuterState(); err != nil {
 		return 0, err
@@ -240,8 +321,20 @@ func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 
 	ts, err := dl.inner.Finalize()
 	if err != nil {
+		dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeDualLayer, IsInitiator: dl.initiator, Err: err})
 		return nil, err
 	}
+
+	// Fire DualLayer IsComplete event
+	dl.dlNotifyMessage(HandshakeEvent{
+		MessageIndex:  dl.msgIndex,
+		Direction:     Sent,
+		Phase:         InnerPhase,
+		HandshakeType: TypeDualLayer,
+		IsInitiator:   dl.initiator,
+		HandshakeHash: ts.GetHandshakeHash(), // copy from inner transport
+		IsComplete:    true,
+	})
 
 	// Destroy outer transport (secrets zeroed)
 	if dl.outerTransport != nil {
@@ -253,6 +346,7 @@ func (dl *DualLayerHandshake) Finalize() (*TransportState, error) {
 	zeroSlice(dl.outerRecvBuf)
 
 	dl.finalized = true
+	dl.observer = nil
 	return ts, nil
 }
 
@@ -303,6 +397,7 @@ func (dl *DualLayerHandshake) Destroy() {
 		dl.outerTransport = nil
 	}
 	zeroSlice(dl.outerRecvBuf)
+	dl.observer = nil
 	dl.finalized = true // prevent use after destroy
 }
 
@@ -326,8 +421,9 @@ type HybridDualLayerHandshake struct {
 
 // NewHybridDualLayerHandshake creates a hybrid dual-layer handshake.
 // Same as DualLayerHandshake but with domain separator binding.
-func NewHybridDualLayerHandshake(outer, inner Handshaker, bufSize int) (*HybridDualLayerHandshake, error) {
-	base, err := newDualLayerGeneric(outer, inner, bufSize)
+// Options: Only WithObserver is applicable.
+func NewHybridDualLayerHandshake(outer, inner Handshaker, bufSize int, opts ...Option) (*HybridDualLayerHandshake, error) {
+	base, err := newDualLayerGeneric(outer, inner, bufSize, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +454,7 @@ func (hdl *HybridDualLayerHandshake) updateOuterState() error {
 		ts, err := hdl.dl.outer.Finalize()
 		hdl.dl.outer = nil // consumed regardless of error
 		if err != nil {
+			hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Sent, Phase: OuterPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
 			return err
 		}
 		hdl.dl.outerTransport = ts
@@ -370,6 +467,7 @@ func (hdl *HybridDualLayerHandshake) updateOuterState() error {
 		h := hdl.dl.outerTransport.GetHandshakeHash()
 		if err := hdl.mixHashIntoInner(domain, h); err != nil {
 			zeroSlice(h)
+			hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
 			// Inner is now in inconsistent state (MixHash succeeded, MixKeyAndHash failed).
 			// Destroy inner to prevent use with corrupted handshake hash.
 			if hdl.dl.inner != nil {
@@ -406,15 +504,40 @@ func (hdl *HybridDualLayerHandshake) WriteMessage(payload, out []byte) (int, err
 
 		n, err := hdl.dl.inner.WriteMessage(payload, out)
 		if err != nil {
+			hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
 			return 0, err
 		}
-		return hdl.dl.outerTransport.SendInPlace(out, n)
+		n, err = hdl.dl.outerTransport.SendInPlace(out, n)
+		if err != nil {
+			hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
+			return 0, err
+		}
+		hdl.dl.dlNotifyMessage(HandshakeEvent{
+			MessageIndex:  hdl.dl.msgIndex,
+			Direction:     Sent,
+			Phase:         InnerPhase,
+			HandshakeType: TypeHybridDualLayer,
+			IsInitiator:   hdl.dl.initiator,
+			PayloadLen:    len(payload),
+		})
+		hdl.dl.msgIndex++
+		return n, nil
 	}
 
 	n, err := hdl.dl.outer.WriteMessage(payload, out)
 	if err != nil {
+		hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Sent, Phase: OuterPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
 		return 0, err
 	}
+	hdl.dl.dlNotifyMessage(HandshakeEvent{
+		MessageIndex:  hdl.dl.msgIndex,
+		Direction:     Sent,
+		Phase:         OuterPhase,
+		HandshakeType: TypeHybridDualLayer,
+		IsInitiator:   hdl.dl.initiator,
+		PayloadLen:    len(payload),
+	})
+	hdl.dl.msgIndex++
 	if err := hdl.updateOuterState(); err != nil {
 		return 0, err
 	}
@@ -429,21 +552,41 @@ func (hdl *HybridDualLayerHandshake) ReadMessage(message, out []byte) (int, erro
 	if hdl.dl.outerFinished {
 		n, err := hdl.dl.outerTransport.Receive(message, hdl.dl.outerRecvBuf)
 		if err != nil {
+			hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Received, Phase: InnerPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
 			return 0, err
 		}
 		payloadN, readErr := hdl.dl.inner.ReadMessage(hdl.dl.outerRecvBuf[:n], out)
-		// Zero decrypted inner message from buffer immediately
 		zeroSlice(hdl.dl.outerRecvBuf[:n])
 		if readErr != nil {
+			hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Received, Phase: InnerPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: readErr})
 			return 0, readErr
 		}
+		hdl.dl.dlNotifyMessage(HandshakeEvent{
+			MessageIndex:  hdl.dl.msgIndex,
+			Direction:     Received,
+			Phase:         InnerPhase,
+			HandshakeType: TypeHybridDualLayer,
+			IsInitiator:   hdl.dl.initiator,
+			PayloadLen:    payloadN,
+		})
+		hdl.dl.msgIndex++
 		return payloadN, nil
 	}
 
 	n, err := hdl.dl.outer.ReadMessage(message, out)
 	if err != nil {
+		hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Received, Phase: OuterPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
 		return 0, err
 	}
+	hdl.dl.dlNotifyMessage(HandshakeEvent{
+		MessageIndex:  hdl.dl.msgIndex,
+		Direction:     Received,
+		Phase:         OuterPhase,
+		HandshakeType: TypeHybridDualLayer,
+		IsInitiator:   hdl.dl.initiator,
+		PayloadLen:    n,
+	})
+	hdl.dl.msgIndex++
 	if err := hdl.updateOuterState(); err != nil {
 		return 0, err
 	}
@@ -462,7 +605,38 @@ func (hdl *HybridDualLayerHandshake) IsWriteTurn() bool {
 
 // Finalize extracts the INNER transport state and destroys the outer.
 func (hdl *HybridDualLayerHandshake) Finalize() (*TransportState, error) {
-	return hdl.dl.Finalize()
+	if hdl.dl.finalized {
+		return nil, ErrAlreadyFinished
+	}
+	if hdl.dl.inner == nil || !hdl.dl.inner.IsFinished() {
+		return nil, ErrNotFinished
+	}
+
+	ts, err := hdl.dl.inner.Finalize()
+	if err != nil {
+		hdl.dl.dlNotifyError(HandshakeErrorEvent{MessageIndex: hdl.dl.msgIndex, Direction: Sent, Phase: InnerPhase, HandshakeType: TypeHybridDualLayer, IsInitiator: hdl.dl.initiator, Err: err})
+		return nil, err
+	}
+
+	// Fire HybridDualLayer IsComplete event
+	hdl.dl.dlNotifyMessage(HandshakeEvent{
+		MessageIndex:  hdl.dl.msgIndex,
+		Direction:     Sent,
+		Phase:         InnerPhase,
+		HandshakeType: TypeHybridDualLayer,
+		IsInitiator:   hdl.dl.initiator,
+		HandshakeHash: ts.GetHandshakeHash(), // copy from inner transport
+		IsComplete:    true,
+	})
+
+	if hdl.dl.outerTransport != nil {
+		hdl.dl.outerTransport.Destroy()
+		hdl.dl.outerTransport = nil
+	}
+	zeroSlice(hdl.dl.outerRecvBuf)
+	hdl.dl.finalized = true
+	hdl.dl.observer = nil
+	return ts, nil
 }
 
 // GetNextMessageOverhead returns the byte overhead for the next message.

@@ -61,6 +61,9 @@ func NewPqHandshake(
 	// Build protocol name and initialize symmetric state
 	name := pqBuildName(pattern, suite)
 	hs.symmetricState = InitializeSymmetric(suite.Hash, suite.Cipher, name)
+	hs.protocolName = name
+	hs.handshakeType = TypePQ
+	hs.observer = ho.observer
 
 	// Mix prologue (Noise spec: always mixed, even if empty)
 	hs.symmetricState.MixHash(ho.prologue)
@@ -253,6 +256,18 @@ func (hs *PqHandshake) WriteMessage(payload, out []byte) (int, error) {
 
 	hs.updateStatus()
 
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:  hs.msgIndex,
+		Direction:     Sent,
+		Phase:         SinglePhase,
+		HandshakeType: TypePQ,
+		IsInitiator:   hs.initiator,
+		ProtocolName:  hs.protocolName,
+		HandshakeHash: hs.GetHandshakeHash(),
+		PayloadLen:    len(payload),
+	})
+	hs.msgIndex++
+
 	return offset, nil
 }
 
@@ -297,6 +312,10 @@ func (hs *PqHandshake) ReadMessage(message, out []byte) (int, error) {
 	}
 
 	// Stateful message parser
+	// Snapshot remote keys before token processing
+	preRE := hs.re
+	preRS := hs.rs
+
 	reader := newMessageReader(message)
 
 	for _, token := range tokens {
@@ -327,6 +346,28 @@ func (hs *PqHandshake) ReadMessage(message, out []byte) (int, error) {
 
 	hs.updateStatus()
 
+	// PQ uses KEM keys in re/rs (not DH), report as KEM
+	var learnedREKEM, learnedRSKEM []byte
+	if preRE == nil && hs.re != nil {
+		learnedREKEM = copyBytes(hs.re.Public)
+	}
+	if preRS == nil && hs.rs != nil {
+		learnedRSKEM = copyBytes(hs.rs.Public)
+	}
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:     hs.msgIndex,
+		Direction:        Received,
+		Phase:            SinglePhase,
+		HandshakeType:    TypePQ,
+		IsInitiator:      hs.initiator,
+		ProtocolName:     hs.protocolName,
+		HandshakeHash:    hs.GetHandshakeHash(),
+		PayloadLen:       payloadLen,
+		RemoteEphemeralKEM: learnedREKEM,
+		RemoteStaticKEM:    learnedRSKEM,
+	})
+	hs.msgIndex++
+
 	return payloadLen, nil
 }
 
@@ -353,6 +394,18 @@ func (hs *PqHandshake) Finalize() (*TransportState, error) {
 
 	h := hs.symmetricState.GetHandshakeHash()
 	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
+
+	// Notify observer IsComplete BEFORE Destroy
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:  hs.msgIndex,
+		Direction:     Sent,
+		Phase:         SinglePhase,
+		HandshakeType: TypePQ,
+		IsInitiator:   hs.initiator,
+		ProtocolName:  hs.protocolName,
+		HandshakeHash: copyBytes(h),
+		IsComplete:    true,
+	})
 
 	hs.finalized = true
 	// Zero ALL handshake state after finalize

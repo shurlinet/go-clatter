@@ -54,6 +54,9 @@ func NewNqHandshake(
 	// Build protocol name and initialize symmetric state
 	name := nqBuildName(pattern, suite)
 	hs.symmetricState = InitializeSymmetric(suite.Hash, suite.Cipher, name)
+	hs.protocolName = name
+	hs.handshakeType = TypeNQ
+	hs.observer = ho.observer
 
 	// Mix prologue (Noise spec: always mixed, even if empty)
 	hs.symmetricState.MixHash(ho.prologue)
@@ -254,6 +257,19 @@ func (hs *NqHandshake) WriteMessage(payload, out []byte) (int, error) {
 
 	hs.updateStatus()
 
+	// Notify observer (WriteMessage events have nil remote keys)
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:  hs.msgIndex,
+		Direction:     Sent,
+		Phase:         SinglePhase,
+		HandshakeType: TypeNQ,
+		IsInitiator:   hs.initiator,
+		ProtocolName:  hs.protocolName,
+		HandshakeHash: hs.GetHandshakeHash(),
+		PayloadLen:    len(payload),
+	})
+	hs.msgIndex++
+
 	return offset, nil
 }
 
@@ -297,6 +313,10 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 		return 0, err
 	}
 
+	// Snapshot remote keys before token processing
+	preRE := hs.re
+	preRS := hs.rs
+
 	// Stateful message parser
 	reader := newMessageReader(message)
 
@@ -329,6 +349,28 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 
 	hs.updateStatus()
 
+	// Notify observer with learned remote keys (snapshot nil->non-nil)
+	var learnedRE, learnedRS []byte
+	if preRE == nil && hs.re != nil {
+		learnedRE = copyBytes(hs.re.Public)
+	}
+	if preRS == nil && hs.rs != nil {
+		learnedRS = copyBytes(hs.rs.Public)
+	}
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:    hs.msgIndex,
+		Direction:       Received,
+		Phase:           SinglePhase,
+		HandshakeType:   TypeNQ,
+		IsInitiator:     hs.initiator,
+		ProtocolName:    hs.protocolName,
+		HandshakeHash:   hs.GetHandshakeHash(),
+		PayloadLen:      payloadLen,
+		RemoteEphemeralDH: learnedRE,
+		RemoteStaticDH:    learnedRS,
+	})
+	hs.msgIndex++
+
 	return payloadLen, nil
 }
 
@@ -355,6 +397,18 @@ func (hs *NqHandshake) Finalize() (*TransportState, error) {
 
 	h := hs.symmetricState.GetHandshakeHash()
 	ts := newTransportState(cs1, cs2, hs.pattern, h, hs.initiator)
+
+	// Notify observer IsComplete BEFORE Destroy
+	hs.notifyMessage(HandshakeEvent{
+		MessageIndex:  hs.msgIndex,
+		Direction:     Sent, // Finalize is an output operation
+		Phase:         SinglePhase,
+		HandshakeType: TypeNQ,
+		IsInitiator:   hs.initiator,
+		ProtocolName:  hs.protocolName,
+		HandshakeHash: copyBytes(h),
+		IsComplete:    true,
+	})
 
 	hs.finalized = true
 	// Zero ALL handshake state after finalize
