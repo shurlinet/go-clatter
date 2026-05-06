@@ -189,6 +189,13 @@ go-clatter is verified by:
 go test -race -count=1 ./...
 ```
 
+## Future Work
+
+* **SLH-DSA** (`crypto/sign/slhdsa`) - FIPS 205 hash-based digital signatures. All 12 parameter sets (SHA2 + SHAKE, 128/192/256 x fast/small). Emergency backup if ML-DSA lattice math is ever found vulnerable. Verified against [NIST ACVP test vectors](https://github.com/usnistgov/ACVP-Server).
+* **SM3 hash function support** - [SM3](https://grokipedia.com/page/sm3_hash_function) is China's national cryptographic hash (ISO/IEC 10118-3:2018, 256-bit, equivalent security to SHA-256). SLH-DSA's hash-agnostic architecture enables SM3-instantiated parameter sets alongside SHA2/SHAKE, providing defense-in-depth with a non-NIST hash function and opening go-clatter to sovereignty-focused deployments. Go library: [`emmansun/gmsm`](https://github.com/emmansun/gmsm).
+* **HQC KEM** - NIST-selected backup KEM (code-based, different math from ML-KEM). Awaiting NIST FIPS finalization (expected late 2026 / early 2027).
+* **China NGCC algorithms** - China's [Next-Generation Commercial Cryptographic Algorithms Program](https://www.niccs.org.cn/en/) (NGCC, launched February 2025) is running its own PQC standardization independently of NIST, with submissions closing June 2026 and algorithm selections expected 2027-2028. go-clatter's modular architecture (CipherSuite, ParamSetFuncs interface) is designed to accommodate new KEM and signature algorithms as they are standardized, regardless of origin.
+
 ## Dependencies
 
 * Go 1.26+ (required for `crypto/mlkem`)
