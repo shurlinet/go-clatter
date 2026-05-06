@@ -12,7 +12,7 @@ Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni
 * This library has not received any formal audit
 * While we use Go's standard library cryptographic primitives, it is up to **you** to evaluate whether they meet your security and integrity requirements
 * Post-quantum cryptography is not as established as classical cryptography. Users are encouraged to use hybrid handshakes (`HybridHandshake`, `HybridDualLayerHandshake`) that combine classical and post-quantum primitives for defense in depth
-* This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 13,000+ handshakes, 408 cross-implementation vectors, and 9 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
+* This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 13,000+ handshakes, 408 cross-implementation vectors, and 10 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
 
 📖 **Documentation** 📖
 
@@ -42,7 +42,7 @@ before any `psk` tokens in the message pattern.
 * **DualLayer** (`DualLayerHandshake`) - Outer-encrypts-inner piped handshake with independent layers
 * **HybridDualLayer** (`HybridDualLayerHandshake`) - Outer-encrypts-inner piped handshake with cryptographic binding between layers
 
-91 handshake patterns. 4 hash functions. 2 AEAD ciphers. 2 KEM sizes.
+90 handshake patterns. 4 hash functions. 2 AEAD ciphers. 2 KEM sizes.
 
 ## Post-Quantum Signing
 
@@ -179,7 +179,9 @@ go-clatter is verified by:
 
 * Unit tests across all packages
 * [Smoke tests](smoke_test.go) - 13,632 handshakes across all pattern/cipher/hash/KEM combinations
+* [Property tests](maxmsglen_property_test.go) - All 90 patterns verified with independent overhead calculator, per-message runtime cross-check, actual-bytes-written oracle, constructor boundary validation, and transport enforcement
 * [Fuzz tests](fuzz_test.go) - 9 fuzz targets matching Rust Clatter's fuzz suite
+* [MaxMsgLen fuzz](maxmsglen_fuzz_test.go) - Boundary sharpness verification across 3 patterns (NQ, PQ, Hybrid) covering all message count shapes
 * [Cacophony](https://github.com/haskell-cryptography/cacophony) and [Snow](https://github.com/mcginty/snow) test vectors - 408 cross-implementation vectors verified byte-for-byte ([vectors/](vectors/))
 * 10 Rust interop vectors generated from Rust Clatter with deterministic RNG
 
