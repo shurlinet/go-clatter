@@ -28,7 +28,7 @@ const (
 	SHAKE_256f ParamSet = 10
 	SHAKE_256s ParamSet = 11
 
-	// BLAKE3 parameter sets (non-FIPS, added in Batch 3C).
+	// BLAKE3 parameter sets (non-FIPS, PQC Suite B).
 	// Reserved byte range 12-17.
 	BLAKE3_128f ParamSet = 12
 	BLAKE3_128s ParamSet = 13
@@ -49,8 +49,8 @@ func validParamSet(ps ParamSet) bool {
 }
 
 // runtimeReady returns true if ps has a fully wired hash function implementation.
-// BLAKE3 param sets return false until hashfuncs/blake3.go is implemented (Batch 3C).
-// Batch 3B's wrapper MUST check this before calling internalParams().Funcs methods.
+// All 18 param sets (SHA2 + SHAKE + BLAKE3) are runtime-ready.
+// Returns false only for invalid ParamSet values (> maxParamSet).
 func runtimeReady(ps ParamSet) bool {
 	return validParamSet(ps) && ps.internalParams().Funcs != nil
 }
@@ -133,22 +133,22 @@ func (ps ParamSet) internalParams() internal.ParamSet {
 		return internal.ParamSet{Funcs: hashfuncs.ParamSetShake{}, N: 32, H: 68, D: 17, Hp: 4, A: 9, K: 35, Lgw: 4, M: 49}
 	case SHAKE_256s:
 		return internal.ParamSet{Funcs: hashfuncs.ParamSetShake{}, N: 32, H: 64, D: 8, Hp: 8, A: 14, K: 22, Lgw: 4, M: 47}
-	// --- BLAKE3 (placeholder - hashfuncs/blake3.go not yet written, Batch 3C) ---
+	// --- BLAKE3 (non-FIPS, PQC Suite B) ---
 	// BLAKE3 param sets use identical numeric params to SHA2/SHAKE equivalents.
-	// Only the Funcs field changes. Until blake3.go exists, these return zero-value
-	// (Funcs=nil). The build gate for Batch 3A only requires compilation, not runtime.
+	// Only the Funcs field changes. BLAKE3 is uniform across all categories
+	// (single ParamSetBLAKE3 struct, unlike SHA2's three category-specific structs).
 	case BLAKE3_128f:
-		return internal.ParamSet{N: 16, H: 66, D: 22, Hp: 3, A: 6, K: 33, Lgw: 4, M: 34}
+		return internal.ParamSet{Funcs: hashfuncs.ParamSetBLAKE3{}, N: 16, H: 66, D: 22, Hp: 3, A: 6, K: 33, Lgw: 4, M: 34}
 	case BLAKE3_128s:
-		return internal.ParamSet{N: 16, H: 63, D: 7, Hp: 9, A: 12, K: 14, Lgw: 4, M: 30}
+		return internal.ParamSet{Funcs: hashfuncs.ParamSetBLAKE3{}, N: 16, H: 63, D: 7, Hp: 9, A: 12, K: 14, Lgw: 4, M: 30}
 	case BLAKE3_192f:
-		return internal.ParamSet{N: 24, H: 66, D: 22, Hp: 3, A: 8, K: 33, Lgw: 4, M: 42}
+		return internal.ParamSet{Funcs: hashfuncs.ParamSetBLAKE3{}, N: 24, H: 66, D: 22, Hp: 3, A: 8, K: 33, Lgw: 4, M: 42}
 	case BLAKE3_192s:
-		return internal.ParamSet{N: 24, H: 63, D: 7, Hp: 9, A: 14, K: 17, Lgw: 4, M: 39}
+		return internal.ParamSet{Funcs: hashfuncs.ParamSetBLAKE3{}, N: 24, H: 63, D: 7, Hp: 9, A: 14, K: 17, Lgw: 4, M: 39}
 	case BLAKE3_256f:
-		return internal.ParamSet{N: 32, H: 68, D: 17, Hp: 4, A: 9, K: 35, Lgw: 4, M: 49}
+		return internal.ParamSet{Funcs: hashfuncs.ParamSetBLAKE3{}, N: 32, H: 68, D: 17, Hp: 4, A: 9, K: 35, Lgw: 4, M: 49}
 	case BLAKE3_256s:
-		return internal.ParamSet{N: 32, H: 64, D: 8, Hp: 8, A: 14, K: 22, Lgw: 4, M: 47}
+		return internal.ParamSet{Funcs: hashfuncs.ParamSetBLAKE3{}, N: 32, H: 64, D: 8, Hp: 8, A: 14, K: 22, Lgw: 4, M: 47}
 	default:
 		return internal.ParamSet{}
 	}

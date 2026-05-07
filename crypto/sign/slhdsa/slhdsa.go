@@ -12,7 +12,7 @@
 // # Parameter Sets
 //
 // 18 parameter sets are available: 12 FIPS 205 (SHA2 + SHAKE) and
-// 6 non-FIPS BLAKE3 variants (added in a later batch). Each parameter set
+// 6 non-FIPS BLAKE3 variants (PQC Suite B). Each parameter set
 // offers different tradeoffs between signature size, signing speed, and
 // security level:
 //
@@ -45,6 +45,17 @@
 // SLH-DSA is safe against RNG nonce reuse. Repeated randomness produces
 // repeated signatures without key leakage (unlike ECDSA). Hedged signing
 // (the default) uses fresh randomness per signature.
+//
+// # Side-Channel Considerations
+//
+// Verification uses constant-time operations for authentication path ordering
+// (byte-mask conditional swap) and root comparison (crypto/subtle). Signing
+// time varies with message content (different FORS tree paths are traversed
+// depending on the message digest). This is inherent to SLH-DSA's design:
+// the tree path is determined by a PRF of the message, and hedged signing
+// ensures each signature traverses different paths even for the same message.
+// Hash function internals (SHA2, SHAKE, BLAKE3) are not constant-time but
+// this is standard for all hash-based cryptography.
 package slhdsa
 
 import (
@@ -126,6 +137,12 @@ func GenerateKey(ps ParamSet) (*PrivateKey, error) {
 // The bytes must be exactly SecretKeySize(ps) bytes (4*N), in the order
 // skseed || skprf || pkseed || pkroot as defined by FIPS 205 Section 8.1.
 // The caller is responsible for zeroing their copy of skBytes after use.
+//
+// Only key size is validated, not hash family. The caller MUST provide
+// the same ParamSet that was used to generate the key. Loading a key
+// with the wrong hash family (e.g., SHA2 key loaded as BLAKE3) produces
+// a key that signs successfully but whose signatures fail verification
+// against the original public key.
 func NewPrivateKeyFromBytes(ps ParamSet, skBytes []byte) (*PrivateKey, error) {
 	if !runtimeReady(ps) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidParamSet, ps)

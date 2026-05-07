@@ -108,6 +108,18 @@ func paramSetFromString(name string) (slhdsa.ParamSet, bool) {
 		return slhdsa.SHAKE_256f, true
 	case "SLH-DSA-SHAKE-256s":
 		return slhdsa.SHAKE_256s, true
+	case "SLH-DSA-BLAKE3-128f":
+		return slhdsa.BLAKE3_128f, true
+	case "SLH-DSA-BLAKE3-128s":
+		return slhdsa.BLAKE3_128s, true
+	case "SLH-DSA-BLAKE3-192f":
+		return slhdsa.BLAKE3_192f, true
+	case "SLH-DSA-BLAKE3-192s":
+		return slhdsa.BLAKE3_192s, true
+	case "SLH-DSA-BLAKE3-256f":
+		return slhdsa.BLAKE3_256f, true
+	case "SLH-DSA-BLAKE3-256s":
+		return slhdsa.BLAKE3_256s, true
 	default:
 		return 0, false
 	}

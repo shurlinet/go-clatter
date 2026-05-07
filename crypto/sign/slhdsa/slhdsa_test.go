@@ -30,6 +30,10 @@ func TestSignVerifyRoundtrip_SHAKE_128f(t *testing.T) {
 	testSignVerifyRoundtrip(t, slhdsa.SHAKE_128f)
 }
 
+func TestSignVerifyRoundtrip_BLAKE3_128f(t *testing.T) {
+	testSignVerifyRoundtrip(t, slhdsa.BLAKE3_128f)
+}
+
 func testSignVerifyRoundtrip(t *testing.T, ps slhdsa.ParamSet) {
 	priv, err := slhdsa.GenerateKey(ps)
 	if err != nil {
@@ -454,11 +458,28 @@ func TestPreHashSignVerify(t *testing.T) {
 }
 
 func TestPreHashBLAKE3Rejected(t *testing.T) {
-	// BLAKE3 param sets are not runtime-ready yet, so GenerateKey fails.
-	// Test that runtimeReady rejects them.
-	_, err := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
-	if err == nil {
-		t.Fatal("BLAKE3 should not be runtime-ready")
+	// BLAKE3 param sets work for pure signing but do NOT support pre-hash
+	// (no FIPS 205 OID defined for BLAKE3).
+	priv, err := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
+	if err != nil {
+		t.Fatalf("BLAKE3 GenerateKey should succeed: %v", err)
+	}
+	defer priv.Destroy()
+
+	// Pure signing works
+	msg := []byte("blake3 test")
+	sig, err := priv.SignMessage(msg)
+	if err != nil {
+		t.Fatalf("BLAKE3 SignMessage should succeed: %v", err)
+	}
+	if !priv.PublicKey().Verify(msg, sig) {
+		t.Fatal("BLAKE3 signature failed verification")
+	}
+
+	// Pre-hash is rejected
+	_, err = priv.SignPreHash(msg, slhdsa.HashSHA2_256)
+	if err != slhdsa.ErrPreHashNotSupported {
+		t.Fatalf("expected ErrPreHashNotSupported, got %v", err)
 	}
 }
 
@@ -494,6 +515,26 @@ func TestSignNilMessage(t *testing.T) {
 	}
 	if !pub.Verify([]byte{}, sig) {
 		t.Fatal("empty message verify failed (should match nil)")
+	}
+}
+
+func TestSignNilMessage_BLAKE3(t *testing.T) {
+	priv, err := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+	pub := priv.PublicKey()
+
+	sig, err := priv.SignMessage(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pub.Verify(nil, sig) {
+		t.Fatal("BLAKE3 nil message verify failed")
+	}
+	if !pub.Verify([]byte{}, sig) {
+		t.Fatal("BLAKE3 empty message verify failed (should match nil)")
 	}
 }
 
@@ -696,6 +737,37 @@ func TestRegressionVectors(t *testing.T) {
 			skPrf:  "DA7F71D21D0182A99DE34E2796FE5DDE046D9C9E961DCE24C2562728BE7D9632",
 			pkSeed: "B3EF3825A515E0B2E4164DB7EC805B4CF1C7A2DE6E63D7DF359B99B1F3063F25",
 			pkRoot: "AEC38FF53C46AAD930166957CA0DB5C5466D0CBE9A11970987A230EBBB5450A4"},
+		// BLAKE3 (PQC Suite B vectors)
+		{name: "BLAKE3-128f", ps: slhdsa.BLAKE3_128f,
+			skSeed: "163FDE32A1FD975478E45A17D4FEFE52",
+			skPrf:  "ABF34218E3B4BB9A986B7BAB6B6A05B6",
+			pkSeed: "5F8CA12CCDED72F25353C832CF51A72B",
+			pkRoot: "CE2FBFC032752EE846169DC528108270"},
+		{name: "BLAKE3-128s", ps: slhdsa.BLAKE3_128s,
+			skSeed: "A910B1F27A2CE155BB50E6A0631495AE",
+			skPrf:  "8AF004E2979B707466229F05EBFC9569",
+			pkSeed: "DF19136B3AD7D2587D3AD6F04473FB27",
+			pkRoot: "569DE582201522D312B21E0DC8D291BD"},
+		{name: "BLAKE3-192f", ps: slhdsa.BLAKE3_192f,
+			skSeed: "0746C6203827ACBE57CC716AFBB2AC8FBB747BFFF3055CAA",
+			skPrf:  "AABEA3E8C61323E46629002863482DD13E916DBB373D2B2C",
+			pkSeed: "0EB283F3C51237A9FB7F96CDA19E1A76B5D286208CA8CB45",
+			pkRoot: "0B041DF3B91B598FF49FE48DFC957FA57205F31EFE0932CB"},
+		{name: "BLAKE3-192s", ps: slhdsa.BLAKE3_192s,
+			skSeed: "30231D5C2574218DBCD8E4F12A509DA9A7E74E0AE38C461E",
+			skPrf:  "261CB7075E525525C0FFD82FEE430FBBA57D7925E3C5E16B",
+			pkSeed: "4DBB201406B97B18FF98464EE19C427EAB9136BA3A31DFD6",
+			pkRoot: "7423EC67BDA34E36C762D22FE95D9147935EAD3FDB8165CA"},
+		{name: "BLAKE3-256f", ps: slhdsa.BLAKE3_256f,
+			skSeed: "8D36BA0F84B323995050F3386745904F7C2560AEF77677908233BF4722895D11",
+			skPrf:  "278462B8D83C0C30102407F372119326E0305E33BE8365DEBBF668E5EB3428F9",
+			pkSeed: "50B4335814AF78691251EA43377AB7C06CA73CCC293F42149869D2DEB562AE24",
+			pkRoot: "FBC4D9070B6A12DAF9848695EC796D836ACDAD9DB0AAFF3B860D0F80CC4DB53A"},
+		{name: "BLAKE3-256s", ps: slhdsa.BLAKE3_256s,
+			skSeed: "DFEFC733F82A4A891A4094F84B2AD7A091784BB0225B0C331D8AF6D9C73A937A",
+			skPrf:  "A5F226DDABE8BCD9C74D4445BB211808F57620AB56BCE0760F817674A1AC29F1",
+			pkSeed: "40514B6E6D4CBF174DD3E0E3B2F01811588F5E3F1D141E5E5410C1C9814BDC3E",
+			pkRoot: "54823335D579B2AC80699C11D70548B6B9820A621B351C6C780DAC91A6997372"},
 	}
 
 	for _, v := range vectors {
@@ -735,6 +807,34 @@ func BenchmarkSign_SHA2_128f(b *testing.B) {
 
 func BenchmarkVerify_SHA2_128f(b *testing.B) {
 	priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer priv.Destroy()
+	pub := priv.PublicKey()
+	msg := []byte("benchmark message")
+	sig, _ := priv.SignMessage(msg)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		pub.Verify(msg, sig)
+	}
+}
+
+func BenchmarkSign_BLAKE3_128f(b *testing.B) {
+	priv, err := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer priv.Destroy()
+	msg := []byte("benchmark message")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = priv.SignMessage(msg)
+	}
+}
+
+func BenchmarkVerify_BLAKE3_128f(b *testing.B) {
+	priv, err := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
 	if err != nil {
 		b.Fatal(err)
 	}

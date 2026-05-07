@@ -142,13 +142,17 @@ func computePreHash(hf HashFunc, msg []byte) []byte {
 		h := sha3.NewShake128()
 		h.Write(msg)
 		buf := make([]byte, 32)
-		io.ReadFull(h, buf) //nolint:errcheck // SHAKE never short-reads
+		if _, err := io.ReadFull(h, buf); err != nil {
+			panic("slhdsa: SHAKE128 XOF short read: " + err.Error())
+		}
 		return buf
 	case HashSHAKE256:
 		h := sha3.NewShake256()
 		h.Write(msg)
 		buf := make([]byte, 64)
-		io.ReadFull(h, buf) //nolint:errcheck
+		if _, err := io.ReadFull(h, buf); err != nil {
+			panic("slhdsa: SHAKE256 XOF short read: " + err.Error())
+		}
 		return buf
 	default:
 		return nil
