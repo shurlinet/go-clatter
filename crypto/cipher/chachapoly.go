@@ -15,9 +15,14 @@ type ChaChaPoly struct{}
 // NewChaChaPoly returns a ChaChaPoly cipher instance.
 func NewChaChaPoly() *ChaChaPoly { return &ChaChaPoly{} }
 
+// Name returns the Noise protocol name for this cipher ("ChaChaPoly").
 func (c *ChaChaPoly) Name() string { return "ChaChaPoly" }
-func (c *ChaChaPoly) TagLen() int  { return 16 }
-func (c *ChaChaPoly) KeyLen() int  { return 32 }
+
+// TagLen returns the authentication tag length in bytes (16).
+func (c *ChaChaPoly) TagLen() int { return 16 }
+
+// KeyLen returns the key length in bytes (32).
+func (c *ChaChaPoly) KeyLen() int { return 32 }
 
 // chachaPolyNonce constructs a 12-byte nonce: 4 zero bytes + 8 little-endian nonce.
 func chachaPolyNonce(n uint64) [12]byte {
@@ -26,6 +31,8 @@ func chachaPolyNonce(n uint64) [12]byte {
 	return nonce
 }
 
+// Encrypt encrypts plaintext with the given key, nonce, and additional data.
+// The result is appended to out and returned.
 func (c *ChaChaPoly) Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []byte) ([]byte, error) {
 	aead, err := chacha20poly1305.New(key[:])
 	if err != nil {
@@ -37,6 +44,8 @@ func (c *ChaChaPoly) Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []by
 	return result, nil
 }
 
+// Decrypt decrypts ciphertext with the given key, nonce, and additional data.
+// Returns [clatter.ErrDecrypt] on authentication failure.
 func (c *ChaChaPoly) Decrypt(key [32]byte, nonce uint64, ad, ciphertext, out []byte) ([]byte, error) {
 	aead, err := chacha20poly1305.New(key[:])
 	if err != nil {

@@ -29,6 +29,7 @@ type ParamSetBLAKE3 struct{}
 // Sum() output length which we never call. We use XOF() for variable-length
 // output. The nil key means unkeyed BLAKE3 (not keyed MAC mode).
 
+// PrfMsg implements FIPS 205 PRF_msg: BLAKE3(skprf || opt_rand || M).
 func (ParamSetBLAKE3) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	h := blake3.New(32, nil)
 	h.Write(skprf)
@@ -41,6 +42,7 @@ func (ParamSetBLAKE3) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	return out
 }
 
+// Hmsg implements FIPS 205 H_msg: BLAKE3(R || pkseed || pkroot || msg).
 func (ParamSetBLAKE3) Hmsg(R, pkseed, pkroot, msg []byte, outlen int) []byte {
 	h := blake3.New(32, nil)
 	h.Write(R)
@@ -54,6 +56,7 @@ func (ParamSetBLAKE3) Hmsg(R, pkseed, pkroot, msg []byte, outlen int) []byte {
 	return out
 }
 
+// PRF implements FIPS 205 PRF: BLAKE3(pkseed || adrs || skseed).
 func (ParamSetBLAKE3) PRF(pkseed, skseed []byte, adrs internal.Address, outlen int) []byte {
 	h := blake3.New(32, nil)
 	h.Write(pkseed)
@@ -66,6 +69,7 @@ func (ParamSetBLAKE3) PRF(pkseed, skseed []byte, adrs internal.Address, outlen i
 	return out
 }
 
+// Tl implements FIPS 205 T_l: BLAKE3(pkseed || adrs || Ml[0] || ... || Ml[L-1]).
 func (ParamSetBLAKE3) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, outlen int) []byte {
 	h := blake3.New(32, nil)
 	h.Write(pkseed)
@@ -80,6 +84,7 @@ func (ParamSetBLAKE3) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, outl
 	return out
 }
 
+// H implements FIPS 205 H: BLAKE3(pkseed || adrs || M2).
 func (ParamSetBLAKE3) H(pkseed []byte, adrs internal.Address, M2 []byte, outlen int) []byte {
 	h := blake3.New(32, nil)
 	h.Write(pkseed)
@@ -92,6 +97,7 @@ func (ParamSetBLAKE3) H(pkseed []byte, adrs internal.Address, M2 []byte, outlen 
 	return out
 }
 
+// F implements FIPS 205 F: BLAKE3(pkseed || adrs || M1).
 func (ParamSetBLAKE3) F(pkseed []byte, adrs internal.Address, M1 []byte, outlen int) []byte {
 	h := blake3.New(32, nil)
 	h.Write(pkseed)

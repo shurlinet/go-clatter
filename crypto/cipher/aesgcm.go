@@ -15,9 +15,14 @@ type AesGcm struct{}
 // NewAesGcm returns an AES-256-GCM cipher instance.
 func NewAesGcm() *AesGcm { return &AesGcm{} }
 
+// Name returns the Noise protocol name for this cipher ("AESGCM").
 func (a *AesGcm) Name() string { return "AESGCM" }
-func (a *AesGcm) TagLen() int  { return 16 }
-func (a *AesGcm) KeyLen() int  { return 32 }
+
+// TagLen returns the authentication tag length in bytes (16).
+func (a *AesGcm) TagLen() int { return 16 }
+
+// KeyLen returns the key length in bytes (32).
+func (a *AesGcm) KeyLen() int { return 32 }
 
 // aesGcmNonce constructs a 12-byte nonce: 4 zero bytes + 8 big-endian nonce.
 func aesGcmNonce(n uint64) [12]byte {
@@ -26,6 +31,8 @@ func aesGcmNonce(n uint64) [12]byte {
 	return nonce
 }
 
+// Encrypt encrypts plaintext with the given key, nonce, and additional data.
+// The result is appended to out and returned.
 func (a *AesGcm) Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
@@ -40,6 +47,8 @@ func (a *AesGcm) Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []byte) 
 	return result, nil
 }
 
+// Decrypt decrypts ciphertext with the given key, nonce, and additional data.
+// Returns [clatter.ErrDecrypt] on authentication failure.
 func (a *AesGcm) Decrypt(key [32]byte, nonce uint64, ad, ciphertext, out []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key[:])
 	if err != nil {

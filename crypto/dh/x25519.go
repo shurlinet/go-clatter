@@ -14,7 +14,10 @@ type X25519 struct{}
 // NewX25519 returns an X25519 DH instance.
 func NewX25519() *X25519 { return &X25519{} }
 
-func (x *X25519) Name() string   { return "25519" }
+// Name returns the Noise protocol name for this DH function ("25519").
+func (x *X25519) Name() string { return "25519" }
+
+// PubKeyLen returns the public key length in bytes (32).
 func (x *X25519) PubKeyLen() int { return 32 }
 
 // GenerateKeypair reads 32 bytes from rng as a private key scalar.

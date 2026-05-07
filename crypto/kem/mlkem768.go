@@ -24,11 +24,20 @@ func NewMlKem768() *MlKem768 { return &MlKem768{testing: false} }
 // encapsulation (reads 32 bytes from RNG for m). For test vector generation only.
 func NewMlKem768Testing() *MlKem768 { return &MlKem768{testing: true} }
 
-func (k *MlKem768) Name() string          { return "MLKEM768" }
-func (k *MlKem768) PubKeyLen() int        { return mlkem.EncapsulationKeySize768 }
-func (k *MlKem768) SecretKeyLen() int      { return 64 } // seed form
-func (k *MlKem768) CiphertextLen() int     { return mlkem.CiphertextSize768 }
-func (k *MlKem768) SharedSecretLen() int   { return mlkem.SharedKeySize }
+// Name returns the Noise protocol name for this KEM ("MLKEM768").
+func (k *MlKem768) Name() string { return "MLKEM768" }
+
+// PubKeyLen returns the encapsulation key length in bytes (1184).
+func (k *MlKem768) PubKeyLen() int { return mlkem.EncapsulationKeySize768 }
+
+// SecretKeyLen returns the secret key length in bytes (64, seed form).
+func (k *MlKem768) SecretKeyLen() int { return 64 }
+
+// CiphertextLen returns the ciphertext length in bytes (1088).
+func (k *MlKem768) CiphertextLen() int { return mlkem.CiphertextSize768 }
+
+// SharedSecretLen returns the shared secret length in bytes (32).
+func (k *MlKem768) SharedSecretLen() int { return mlkem.SharedKeySize }
 
 // GenerateKeypair reads 64 bytes from rng as seed (d||z), then calls
 // NewDecapsulationKey768(seed). FIPS 203 deterministic expansion.

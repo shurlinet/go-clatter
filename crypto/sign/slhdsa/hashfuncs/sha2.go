@@ -56,6 +56,7 @@ func genericSha512(n uint8, cadrs internal.CompressedAddress, pkseed, M []byte, 
 // All 6 methods use SHA-256 exclusively.
 type ParamSetSha2Cat1 struct{}
 
+// PrfMsg implements FIPS 205 PRF_msg: HMAC-SHA-256(skprf, opt_rand || M).
 func (x ParamSetSha2Cat1) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	raw := hmac.New(sha256.New, skprf)
 	raw.Write(opt_rand)
@@ -64,6 +65,7 @@ func (x ParamSetSha2Cat1) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	return out[0:outlen]
 }
 
+// Hmsg implements FIPS 205 H_msg using MGF1-SHA-256.
 func (x ParamSetSha2Cat1) Hmsg(R, pkseed, pkroot, msg []byte, outlen int) []byte {
 	h := sha256.New()
 	seed := []byte{}
@@ -79,11 +81,13 @@ func (x ParamSetSha2Cat1) Hmsg(R, pkseed, pkroot, msg []byte, outlen int) []byte
 	return internal.MGF1(seed, uint32(outlen), h)
 }
 
+// PRF implements FIPS 205 PRF using SHA-256 with CompressedAddress.
 func (x ParamSetSha2Cat1) PRF(pkseed, skseed []byte, adrs internal.Address, outlen int) []byte {
 	cadrs := adrs.Compress()
 	return genericSha256(uint8(16), cadrs, pkseed, skseed, outlen)
 }
 
+// Tl implements FIPS 205 T_l using SHA-256 with CompressedAddress.
 func (x ParamSetSha2Cat1) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	i_64_n := uint8(48)
@@ -98,11 +102,13 @@ func (x ParamSetSha2Cat1) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, 
 	return out[0:outlen]
 }
 
+// H implements FIPS 205 H using SHA-256 with CompressedAddress.
 func (x ParamSetSha2Cat1) H(pkseed []byte, adrs internal.Address, M2 []byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	return genericSha256(16, cadrs, pkseed, M2, outlen)
 }
 
+// F implements FIPS 205 F using SHA-256 with CompressedAddress.
 func (x ParamSetSha2Cat1) F(pkseed []byte, adrs internal.Address, M1 []byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	return genericSha256(16, cadrs, pkseed, M1, outlen)
@@ -113,6 +119,7 @@ func (x ParamSetSha2Cat1) F(pkseed []byte, adrs internal.Address, M1 []byte, out
 // This asymmetry is specified by FIPS 205 Section 10.2.
 type ParamSetSha2Cat3 struct{}
 
+// PrfMsg implements FIPS 205 PRF_msg: HMAC-SHA-512(skprf, opt_rand || M).
 func (x ParamSetSha2Cat3) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	raw := hmac.New(sha512.New, skprf)
 	raw.Write(opt_rand)
@@ -121,6 +128,7 @@ func (x ParamSetSha2Cat3) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	return out[0:outlen]
 }
 
+// Hmsg implements FIPS 205 H_msg using MGF1-SHA-512.
 func (x ParamSetSha2Cat3) Hmsg(R, pkseed, pkroot, msg []byte, outlen int) []byte {
 	h := sha512.New()
 	seed := []byte{}
@@ -149,6 +157,7 @@ func (x ParamSetSha2Cat3) PRF(pkseed, skseed []byte, adrs internal.Address, outl
 	return out[0:outlen]
 }
 
+// Tl implements FIPS 205 T_l using SHA-512 with CompressedAddress.
 func (x ParamSetSha2Cat3) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	i_128_n := uint8(104) // 128 - 24
@@ -163,6 +172,7 @@ func (x ParamSetSha2Cat3) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, 
 	return out[0:outlen]
 }
 
+// H implements FIPS 205 H using SHA-512 with CompressedAddress.
 func (x ParamSetSha2Cat3) H(pkseed []byte, adrs internal.Address, M2 []byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	return genericSha512(24, cadrs, pkseed, M2, outlen)
@@ -179,6 +189,7 @@ func (x ParamSetSha2Cat3) F(pkseed []byte, adrs internal.Address, M1 []byte, out
 // Same asymmetry as Category 3, specified by FIPS 205 Section 10.2.
 type ParamSetSha2Cat5 struct{}
 
+// PrfMsg implements FIPS 205 PRF_msg: HMAC-SHA-512(skprf, opt_rand || M).
 func (x ParamSetSha2Cat5) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	raw := hmac.New(sha512.New, skprf)
 	raw.Write(opt_rand)
@@ -187,6 +198,7 @@ func (x ParamSetSha2Cat5) PrfMsg(skprf, opt_rand, M []byte, outlen int) []byte {
 	return out[0:outlen]
 }
 
+// Hmsg implements FIPS 205 H_msg using MGF1-SHA-512.
 func (x ParamSetSha2Cat5) Hmsg(R, pkseed, pkroot, msg []byte, outlen int) []byte {
 	h := sha512.New()
 	seed := []byte{}
@@ -215,6 +227,7 @@ func (x ParamSetSha2Cat5) PRF(pkseed, skseed []byte, adrs internal.Address, outl
 	return out[0:outlen]
 }
 
+// Tl implements FIPS 205 T_l using SHA-512 with CompressedAddress.
 func (x ParamSetSha2Cat5) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	i_128_n := uint8(96) // 128 - 32
@@ -229,6 +242,7 @@ func (x ParamSetSha2Cat5) Tl(pkseed []byte, adrs internal.Address, Ml [][]byte, 
 	return out[0:outlen]
 }
 
+// H implements FIPS 205 H using SHA-512 with CompressedAddress.
 func (x ParamSetSha2Cat5) H(pkseed []byte, adrs internal.Address, M2 []byte, outlen int) []byte {
 	cadrs := adrs.Compress()
 	return genericSha512(32, cadrs, pkseed, M2, outlen)
