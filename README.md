@@ -12,7 +12,7 @@ Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni
 * This library has not received any formal audit
 * While we use Go's standard library cryptographic primitives, it is up to **you** to evaluate whether they meet your security and integrity requirements
 * Post-quantum cryptography is not as established as classical cryptography. Users are encouraged to use hybrid handshakes (`HybridHandshake`, `HybridDualLayerHandshake`) that combine classical and post-quantum primitives for defense in depth
-* This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 13,000+ handshakes, 408 cross-implementation vectors, and 10 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
+* This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 26,000+ handshakes, 408 cross-implementation vectors, 1,452 NIST/PQC-Suite-B vectors, and 11 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
 
 📖 **Documentation** 📖
 
@@ -210,7 +210,7 @@ Observer events report learned remote keys (DH and KEM), handshake hash, protoco
 go-clatter is verified by:
 
 * Unit tests across all packages
-* [Smoke tests](smoke_test.go) - 13,632 handshakes across all pattern/cipher/hash/KEM combinations
+* [Smoke tests](smoke_test.go) - 26,112 handshakes across all pattern/cipher/hash/KEM combinations (NQ + PQ + Hybrid + DualLayer + HybridDualLayer)
 * [Property tests](maxmsglen_property_test.go) - All 90 patterns verified with independent overhead calculator, per-message runtime cross-check, actual-bytes-written oracle, constructor boundary validation, and transport enforcement
 * [Fuzz tests](fuzz_test.go) - 9 Noise fuzz targets matching Rust Clatter's fuzz suite + 2 SLH-DSA fuzz targets (sign-verify round-trip + loader crash resistance)
 * [MaxMsgLen fuzz](maxmsglen_fuzz_test.go) - Boundary sharpness verification across 3 patterns (NQ, PQ, Hybrid) covering all message count shapes
