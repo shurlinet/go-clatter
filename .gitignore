@@ -4,6 +4,9 @@
 *.dll
 *.so
 *.dylib
+/slhdsa
+/slhdsa_blake3
+/check-upstream
 
 # Test binary
 *.test
