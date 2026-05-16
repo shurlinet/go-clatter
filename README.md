@@ -225,7 +225,7 @@ make test
 
 Or equivalently: `go test -race -count=1 -timeout 30m ./...`
 
-The SLH-DSA package includes 1,452 ACVP/BLAKE3 vectors across all 18 parameter sets. The `-s` (small signature) variants build deep hypertrees and take 15+ minutes with `-race`. The default Go timeout of 10 minutes is not enough. The Makefile ensures the correct flags are always used.
+The SLH-DSA package includes 1,452 ACVP/BLAKE3 vectors across all 18 parameter sets. The `-s` (small signature) variants build deep hypertrees and take 15+ minutes with `-race` on Apple Silicon, longer on CI runners. The default Go timeout of 10 minutes is not enough. The Makefile ensures the correct flags are always used. CI uses a 90-minute timeout for the slhdsa package to account for slower shared runners.
 
 ## Future Work
 
