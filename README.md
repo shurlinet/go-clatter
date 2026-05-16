@@ -220,8 +220,12 @@ go-clatter is verified by:
 * [PQC Suite B BLAKE3 vectors](crypto/sign/slhdsa/testdata/blake3/) - 192 cross-implementation vectors for all 6 BLAKE3 parameter sets
 
 ```
-go test -race -count=1 ./...
+make test
 ```
+
+Or equivalently: `go test -race -count=1 -timeout 30m ./...`
+
+The SLH-DSA package includes 1,452 ACVP/BLAKE3 vectors across all 18 parameter sets. The `-s` (small signature) variants build deep hypertrees and take 15+ minutes with `-race`. The default Go timeout of 10 minutes is not enough. The Makefile ensures the correct flags are always used.
 
 ## Future Work
 
