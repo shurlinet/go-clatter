@@ -1,23 +1,27 @@
 # go-clatter 🔊
 
+[![Go Tests](https://github.com/shurlinet/go-clatter/actions/workflows/ci.yml/badge.svg)](https://github.com/shurlinet/go-clatter/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shurlinet/go-clatter.svg)](https://pkg.go.dev/github.com/shurlinet/go-clatter)
+[![Go Report Card](https://goreportcard.com/badge/github.com/shurlinet/go-clatter)](https://goreportcard.com/report/github.com/shurlinet/go-clatter)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Post-quantum [Noise](https://noiseprotocol.org/noise.html) handshakes for Go. Implements the [PQNoise](https://doi.org/10.1145/3548606.3560577) ([alt](https://sci-net.xyz/10.1145/3548606.3560577)) extensions (ACM CCS 2022) that replace classical DH key exchanges with quantum-resistant KEMs while preserving Noise's formal security guarantees.
 
-Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni Lepisto](https://github.com/jmlepisto) and verified against it byte-for-byte. Built on Go stdlib crypto (`crypto/mlkem`, `crypto/ecdh`) with `golang.org/x/crypto` for ChaCha20-Poly1305 and BLAKE2. No other external dependencies. All secret key material lives in fixed-size arrays with explicit `Destroy()` zeroing.
+Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni Lepisto](https://github.com/jmlepisto) and verified against it byte-for-byte. Built on Go stdlib crypto (`crypto/mlkem`, `crypto/ecdh`) with `golang.org/x/crypto` for ChaCha20-Poly1305 and BLAKE2. No other external dependencies for Noise handshakes.
 
-⚠️ **Warning** ⚠️
+> **Warning**
+>
+> * This library has not received any formal audit
+> * While we use Go's standard library cryptographic primitives, it is up to **you** to evaluate whether they meet your security and integrity requirements
+> * Post-quantum cryptography is not as established as classical cryptography. Users are encouraged to use hybrid handshakes (`HybridHandshake`, `HybridDualLayerHandshake`) that combine classical and post-quantum primitives for defense in depth
 
-* This library has not received any formal audit
-* While we use Go's standard library cryptographic primitives, it is up to **you** to evaluate whether they meet your security and integrity requirements
-* Post-quantum cryptography is not as established as classical cryptography. Users are encouraged to use hybrid handshakes (`HybridHandshake`, `HybridDualLayerHandshake`) that combine classical and post-quantum primitives for defense in depth
-* This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 26,000+ handshakes, 408 cross-implementation vectors, 1,452 NIST/PQC-Suite-B vectors, and 11 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
+## Install
 
-📖 **Documentation** 📖
+```
+go get github.com/shurlinet/go-clatter
+```
 
-* [`pkg.go.dev`](https://pkg.go.dev/github.com/shurlinet/go-clatter) - API reference and type docs
-* [`examples/`](examples/) - Runnable examples for every handshake type, observer callbacks, ML-DSA-65, and SLH-DSA signing
+Requires Go 1.26+ (for `crypto/mlkem`).
 
 ## Noise Protocol
 
@@ -50,6 +54,28 @@ before any `psk` tokens in the message pattern.
 * **SLH-DSA** (`crypto/sign/slhdsa`) - FIPS 205 hash-based digital signatures. NIST's backup to ML-DSA. 18 parameter sets: 12 FIPS (SHA2 + SHAKE) and 6 non-FIPS BLAKE3 variants. Security levels 1/3/5 with fast-sign and small-sig tradeoffs. Verified against 1,260 NIST ACVP vectors and 192 PQC Suite B BLAKE3 vectors.
 
 Standalone signing modules. Not integrated into the Noise handshake - these are general-purpose signing primitives for application-layer use.
+
+## Security
+
+* **Stdlib crypto** - All Noise handshake primitives use Go's standard library (`crypto/mlkem`, `crypto/ecdh`, `crypto/aes`) or `golang.org/x/crypto` (ChaCha20-Poly1305, BLAKE2). No hand-rolled cryptography.
+* **Secret zeroing** - All secret key material lives in fixed-size arrays with explicit `Destroy()` methods. Callers must call `Destroy()` when keys are no longer needed.
+* **Errors, not panics** - All error conditions return Go `error` values. Invalid inputs, state violations, and crypto failures are handled through Go's standard error pattern.
+* **HKDF key derivation** - Manual HKDF implementation matching Noise spec (not a wrapper), with HMAC key length validation and full error propagation through HKDF2/HKDF3.
+* **Concurrency safety** - Handshake objects detect concurrent use via atomic guards and return errors. Transport ciphers use independent nonce counters per direction.
+* **Minimal dependencies** - Noise handshakes depend only on Go stdlib + `golang.org/x/crypto`. Signing modules add `filippo.io/mldsa` (ML-DSA) and embedded Trail of Bits engine (SLH-DSA).
+
+## Spec Compliance
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Noise rev 34 one-way patterns | Supported | N, K, X |
+| Noise rev 34 interactive patterns | Supported | NN, NK, NX, KN, KK, KX, XN, XK, XX, IN, IK, IX |
+| PQNoise KEM patterns (ACM CCS 2022) | Supported | pqNN, pqNK, pqNX, pqKN, pqKK, pqKX, pqXN, pqXK, pqXX, pqIN, pqIK, pqIX |
+| Hybrid DH+KEM patterns | Supported | All interactive patterns with combined DH and KEM |
+| Dual-layer piped handshakes | Supported | DualLayer and HybridDualLayer with cryptographic binding |
+| PSK modifiers (psk0-psk4) | Supported | Modified validity rule for PQ patterns (see PSK section) |
+| Curve 448 DH | Not supported | No suitable Go implementation |
+| Deferred/fallback patterns | Not supported | Can be implemented by the user |
 
 ## Crypto Primitives
 
@@ -197,13 +223,39 @@ alice, _ := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
 
 Observer events report learned remote keys (DH and KEM), handshake hash, protocol name, phase (for dual-layer), and completion status. A nil observer has zero overhead. Panics in observer callbacks are recovered. See [`examples/observer/`](examples/observer/) and the [Observer godoc](https://pkg.go.dev/github.com/shurlinet/go-clatter#Observer).
 
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [`examples/nq/`](examples/nq/) | Classical NQ (X25519) handshake |
+| [`examples/pq/`](examples/pq/) | Post-quantum PQ (ML-KEM) handshake |
+| [`examples/hybrid/`](examples/hybrid/) | Hybrid DH+KEM handshake |
+| [`examples/dual_layer/`](examples/dual_layer/) | Dual-layer piped handshake |
+| [`examples/psk/`](examples/psk/) | Pre-shared key handshake |
+| [`examples/observer/`](examples/observer/) | Observer callbacks for handshake events |
+| [`examples/mldsa65/`](examples/mldsa65/) | ML-DSA-65 post-quantum signing |
+| [`examples/slhdsa/`](examples/slhdsa/) | SLH-DSA signing (SHA2/SHAKE) |
+| [`examples/slhdsa_blake3/`](examples/slhdsa_blake3/) | SLH-DSA signing (BLAKE3) |
+
+## Consumer Responsibilities
+
+* **Call `Destroy()` on private keys** when they are no longer needed. `Destroy()` zeroes secret material. The Go garbage collector does not guarantee timely zeroing of freed memory.
+* **Use hybrid handshakes for defense in depth.** PQC is newer than classical crypto. `HybridHandshake` and `HybridDualLayerHandshake` combine both so that security holds even if one primitive is broken.
+* **Set a prologue** for protocol binding. The prologue is mixed into the handshake hash and prevents cross-protocol replay. Use a unique string per application (e.g., `"my-app/v1"`).
+* **Do not reuse handshake objects.** Each handshake instance is single-use. Create a new one per connection.
+* **Transport ciphers are directional.** After handshake completion, `TransportState` provides separate send/receive ciphers. Do not swap them.
+
 ## Differences to Rust Clatter
 
-* **CipherSuite struct** instead of generic type parameters - Go's type system favours runtime dispatch
-* **All Rust panics are Go errors** - go-clatter never panics on user input
-* **No ML-KEM-512** - Go stdlib `crypto/mlkem` ships 768 and 1024 only (NIST security margin decision)
-* **No cross-vendor KEM tests** - Go has one KEM implementation per key size (stdlib)
-* **Post-quantum signing modules** - go-clatter extends beyond handshakes with standalone FIPS 204 (ML-DSA-65) and FIPS 205 (SLH-DSA) signature primitives. Rust Clatter does not include signing modules. This gives Go consumers a complete PQ toolkit: quantum-resistant key exchange (ML-KEM), lattice-based signatures (ML-DSA), and hash-based signatures (SLH-DSA) under one roof.
+| Feature | go-clatter | Rust Clatter |
+|---------|-----------|--------------|
+| Type dispatch | `CipherSuite` struct (runtime) | Generic type parameters (compile-time) |
+| Error handling | Go `error` values (idiomatic Go) | Panics for invariant violations (idiomatic Rust) |
+| ML-KEM-512 | Not available (Go stdlib ships 768+1024 only) | Available |
+| Cross-vendor KEM tests | N/A (Go has one stdlib impl) | Tests against multiple KEM implementations |
+| Signing modules | ML-DSA-65 (FIPS 204) + SLH-DSA (FIPS 205) | Not in scope |
+| Observer callbacks | Supported | Not in scope |
+| Max message size | Configurable per-handshake | Fixed |
 
 ## Verification
 
@@ -235,10 +287,12 @@ The SLH-DSA package includes 1,452 ACVP/BLAKE3 vectors across all 18 parameter s
 
 ## Dependencies
 
-* Go 1.26+ (required for `crypto/mlkem`)
-* `golang.org/x/crypto` (ChaCha20-Poly1305, BLAKE2, SHA3/SHAKE)
-* [`filippo.io/mldsa`](https://pkg.go.dev/filippo.io/mldsa) (ML-DSA-65 signing) - Pre-release of Go's upcoming `crypto/mldsa` stdlib package, maintained by [Filippo Valsorda](https://filippo.io). Migration to stdlib is a single import path change when `crypto/mldsa` ships (proposal [#77626](https://github.com/golang/go/issues/77626) accepted).
-* [`lukechampine.com/blake3`](https://pkg.go.dev/lukechampine.com/blake3) (SLH-DSA BLAKE3 param sets) - Pure Go + SIMD assembly for amd64/arm64.
+| Dependency | Purpose |
+|-----------|---------|
+| Go 1.26+ | Required for `crypto/mlkem` |
+| `golang.org/x/crypto` | ChaCha20-Poly1305, BLAKE2, SHA3/SHAKE |
+| [`filippo.io/mldsa`](https://pkg.go.dev/filippo.io/mldsa) | ML-DSA-65 signing. Pre-release of Go's upcoming `crypto/mldsa` stdlib package, maintained by [Filippo Valsorda](https://filippo.io). Migration to stdlib is a single import path change when `crypto/mldsa` ships (proposal [#77626](https://github.com/golang/go/issues/77626) accepted). |
+| [`lukechampine.com/blake3`](https://pkg.go.dev/lukechampine.com/blake3) | SLH-DSA BLAKE3 param sets. Pure Go + SIMD assembly for amd64/arm64. |
 
 ## Acknowledgments
 
@@ -259,6 +313,10 @@ Thanks to [JP Aumasson](https://aumasson.jp), [Zooko Wilcox-O'Hearn](https://gro
 
 Thanks to [Luke Champine](https://github.com/lukechampine) for [lukechampine.com/blake3](https://github.com/lukechampine/blake3) - the BLAKE3 implementation with SIMD acceleration for amd64 and arm64.
 
+## AI Transparency
+
+This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 26,000+ handshakes, 408 cross-implementation vectors, 1,452 NIST/PQC-Suite-B vectors, and 11 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
+
 ## License
 
-MIT - matching the upstream Rust Clatter license.
+MIT - matching the upstream Rust Clatter license. See [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) for embedded dependencies.

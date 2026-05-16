@@ -10,7 +10,7 @@ Embedded and vendored code tracked for security fixes and updates.
 - **License:** BSD-3-Clause
 - **Files:** types.go, slh_dsa.go, utility.go, fors.go, hypertree.go, wotsplus.go, xmss.go, mgf1.go
 - **Modifications:** Package path changed, Zero() method added to SLHSecretKey, nil guard on Zero()
-- **Last checked:** 2026-05-07
+- **Last checked:** 2026-05-16
 
 ## PQC Suite B SLH-DSA-B Test Vectors
 
@@ -19,7 +19,7 @@ Embedded and vendored code tracked for security fixes and updates.
 - **Copied into:** crypto/sign/slhdsa/testdata/blake3/
 - **License:** Apache-2.0 OR MIT
 - **Files:** blake3_keygen.json, blake3_sig.json, blake3_ver.json
-- **Last checked:** 2026-05-07
+- **Last checked:** 2026-05-16
 
 ## NIST ACVP-Server SLH-DSA Vectors
 
@@ -27,4 +27,4 @@ Embedded and vendored code tracked for security fixes and updates.
 - **Copied into:** crypto/sign/slhdsa/testdata/acvp/
 - **License:** Public domain (U.S. Government work)
 - **Files:** keygen.json, sigGen.json, sigVer.json
-- **Last checked:** 2026-05-07
+- **Last checked:** 2026-05-16
