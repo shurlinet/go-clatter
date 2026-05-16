@@ -2,6 +2,7 @@ package clatter
 
 import (
 	"crypto/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -272,7 +273,7 @@ func TestHandshakeInternals_ConcurrentUseRace(t *testing.T) {
 				conflicts.Add(1)
 				return
 			}
-			// Simulate brief work
+			runtime.Gosched() // yield to force goroutine interleaving
 			h.releaseUse()
 		}()
 	}
