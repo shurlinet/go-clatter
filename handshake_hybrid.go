@@ -49,6 +49,9 @@ func NewHybridHandshake(
 	if suite.DH == nil || suite.EKEM == nil || suite.SKEM == nil || suite.Cipher == nil || suite.Hash == nil {
 		return nil, fmt.Errorf("%w: CipherSuite requires DH, EKEM, SKEM, Cipher, and Hash", ErrMissingKey)
 	}
+	if suite.Experimental && !AllowExperimental.Load() {
+		return nil, fmt.Errorf("%w: set clatter.AllowExperimental.Store(true) first", ErrExperimentalNotAllowed)
+	}
 
 	ho := applyOptions(opts)
 

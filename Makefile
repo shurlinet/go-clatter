@@ -1,3 +1,6 @@
-.PHONY: test
+.PHONY: test test-hqc
 test:
 	go test -race -count=1 -timeout 30m ./...
+
+test-hqc:
+	go test -tags hqc -race -count=1 -timeout 30m ./...

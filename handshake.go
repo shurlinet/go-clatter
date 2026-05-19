@@ -380,12 +380,17 @@ func (r *messageReader) rest() []byte {
 // CipherSuite bundles all cryptographic primitive choices for a handshake.
 // Created once, passed to handshake constructors. Avoids Go generics by
 // using runtime interface dispatch.
+//
+// Set Experimental to true when using pre-FIPS KEMs (e.g. HQC).
+// The constructor rejects experimental suites unless [AllowExperimental] is
+// also set to true, providing a two-layer defense against accidental use.
 type CipherSuite struct {
-	DH     DH       // X25519
-	Cipher Cipher   // ChaCha20Poly1305 or AES-256-GCM
-	Hash   HashFunc // SHA256, SHA512, BLAKE2s, BLAKE2b
-	EKEM   KEM      // ML-KEM-768 or 1024 (ephemeral KEM)
-	SKEM   KEM      // ML-KEM-768 or 1024 (static KEM), usually same as EKEM
+	DH           DH       // X25519
+	Cipher       Cipher   // ChaCha20Poly1305 or AES-256-GCM
+	Hash         HashFunc // SHA256, SHA512, BLAKE2s, BLAKE2b
+	EKEM         KEM      // Ephemeral KEM (ML-KEM-768, ML-KEM-1024, or HQC with build tag)
+	SKEM         KEM      // Static KEM (same types as EKEM), usually same instance
+	Experimental bool     // true for pre-FIPS algorithms (HQC). Requires AllowExperimental.
 }
 
 // Option is a functional option for handshake constructors.

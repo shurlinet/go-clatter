@@ -41,6 +41,9 @@ func NewPqHandshake(
 	if suite.EKEM == nil || suite.SKEM == nil || suite.Cipher == nil || suite.Hash == nil {
 		return nil, fmt.Errorf("%w: CipherSuite requires EKEM, SKEM, Cipher, and Hash", ErrMissingKey)
 	}
+	if suite.Experimental && !AllowExperimental.Load() {
+		return nil, fmt.Errorf("%w: set clatter.AllowExperimental.Store(true) first", ErrExperimentalNotAllowed)
+	}
 
 	ho := applyOptions(opts)
 

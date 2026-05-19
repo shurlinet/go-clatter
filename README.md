@@ -46,7 +46,7 @@ before any `psk` tokens in the message pattern.
 * **DualLayer** (`DualLayerHandshake`) - Outer-encrypts-inner piped handshake with independent layers
 * **HybridDualLayer** (`HybridDualLayerHandshake`) - Outer-encrypts-inner piped handshake with cryptographic binding between layers
 
-90 handshake patterns. 4 hash functions. 2 AEAD ciphers. 2 KEM sizes.
+90 handshake patterns. 4 hash functions. 2 AEAD ciphers. 2 ML-KEM sizes. 3 HQC sizes (experimental).
 
 ## Post-Quantum Signing
 
@@ -84,6 +84,9 @@ Standalone signing modules. Not integrated into the Noise handshake - these are 
 | X25519 DH | `crypto/ecdh` | `25519` |
 | ML-KEM-768 | `crypto/mlkem` (FIPS 203) | `MLKEM768` |
 | ML-KEM-1024 | `crypto/mlkem` (FIPS 203) | `MLKEM1024` |
+| HQC-128 | [`go-hqc`](https://pkg.go.dev/github.com/shurlinet/go-hqc) (experimental, build tag `hqc`) | `HQC128` |
+| HQC-192 | `go-hqc` (experimental) | `HQC192` |
+| HQC-256 | `go-hqc` (experimental) | `HQC256` |
 | ChaCha20-Poly1305 | `golang.org/x/crypto` | `ChaChaPoly` |
 | AES-256-GCM | `crypto/aes` | `AESGCM` |
 | SHA-256 | `crypto/sha256` | `SHA256` |
@@ -144,6 +147,40 @@ alice, _ := clatter.NewHybridHandshake(clatter.PatternHybridXX, true, hybridSuit
     clatter.WithPrologue([]byte("my-app/v1")),
 )
 ```
+
+### HQC (Experimental)
+
+HQC is NIST's backup KEM (code-based, different math from ML-KEM). It requires two deliberate opt-ins:
+
+1. **Build tag**: compile with `-tags hqc`
+2. **Runtime flag**: `clatter.AllowExperimental.Store(true)`
+
+```go
+//go:build hqc
+
+import (
+    clatter "github.com/shurlinet/go-clatter"
+    "github.com/shurlinet/go-clatter/crypto/cipher"
+    "github.com/shurlinet/go-clatter/crypto/hash"
+    "github.com/shurlinet/go-clatter/crypto/kem"
+)
+
+clatter.AllowExperimental.Store(true)
+
+suite := clatter.CipherSuite{
+    EKEM:         kem.NewHqc128(),
+    SKEM:         kem.NewHqc128(),
+    Cipher:       cipher.NewChaChaPoly(),
+    Hash:         hash.NewSha256(),
+    Experimental: true,
+}
+
+alice, _ := clatter.NewPqHandshake(clatter.PatternPqXX, true, suite,
+    clatter.WithStaticKey(aliceKeys),
+)
+```
+
+Without the build tag, HQC code is not compiled (zero binary bloat). Without `AllowExperimental`, every KEM operation returns `ErrExperimentalNotAllowed`. Both gates will be relaxed as HQC progresses through FIPS standardization.
 
 ### ML-DSA-65 Signing
 
@@ -229,6 +266,7 @@ Observer events report learned remote keys (DH and KEM), handshake hash, protoco
 |---------|-------------|
 | [`examples/nq/`](examples/nq/) | Classical NQ (X25519) handshake |
 | [`examples/pq/`](examples/pq/) | Post-quantum PQ (ML-KEM) handshake |
+| [`examples/hqc/`](examples/hqc/) | Post-quantum PQ (HQC-128) handshake (experimental, `-tags hqc`) |
 | [`examples/hybrid/`](examples/hybrid/) | Hybrid DH+KEM handshake |
 | [`examples/dual_layer/`](examples/dual_layer/) | Dual-layer piped handshake |
 | [`examples/psk/`](examples/psk/) | Pre-shared key handshake |
@@ -264,7 +302,9 @@ go-clatter is verified by:
 * Unit tests across all packages
 * [Smoke tests](smoke_test.go) - 26,112 handshakes across all pattern/cipher/hash/KEM combinations (NQ + PQ + Hybrid + DualLayer + HybridDualLayer)
 * [Property tests](maxmsglen_property_test.go) - All 90 patterns verified with independent overhead calculator, per-message runtime cross-check, actual-bytes-written oracle, constructor boundary validation, and transport enforcement
-* [Fuzz tests](fuzz_test.go) - 9 Noise fuzz targets matching Rust Clatter's fuzz suite + 2 SLH-DSA fuzz targets (sign-verify round-trip + loader crash resistance)
+* [HQC smoke tests](smoke_hqc_test.go) - PQ (all 3 param sets), Hybrid, DualLayer, mixed KEM, experimental gate, and mid-handshake toggle tests (build tag `hqc`)
+* [HQC property tests](maxmsglen_hqc_property_test.go) - All 90 patterns verified with HQC-128 overhead calculator (build tag `hqc`)
+* [Fuzz tests](fuzz_test.go) - 9 Noise fuzz targets matching Rust Clatter + 1 [HQC fuzz](smoke_hqc_test.go) (build tag `hqc`) + 2 SLH-DSA fuzz targets (sign-verify round-trip + loader crash resistance)
 * [MaxMsgLen fuzz](maxmsglen_fuzz_test.go) - Boundary sharpness verification across 3 patterns (NQ, PQ, Hybrid) covering all message count shapes
 * [Cacophony](https://github.com/haskell-cryptography/cacophony) and [Snow](https://github.com/mcginty/snow) test vectors - 408 cross-implementation vectors verified byte-for-byte ([vectors/](vectors/))
 * 10 Rust interop vectors generated from Rust Clatter with deterministic RNG
@@ -282,7 +322,7 @@ The SLH-DSA package includes 1,452 ACVP/BLAKE3 vectors across all 18 parameter s
 ## Future Work
 
 * **SM3 hash function support** - [SM3](https://grokipedia.com/page/sm3_hash_function) is China's national cryptographic hash (ISO/IEC 10118-3:2018, 256-bit, equivalent security to SHA-256). SLH-DSA's hash-agnostic architecture enables SM3-instantiated parameter sets alongside SHA2/SHAKE/BLAKE3. Go library: [`emmansun/gmsm`](https://github.com/emmansun/gmsm). Waiting for official SLH-DSA-SM3 spec.
-* **HQC KEM** - NIST-selected backup KEM (code-based, different math from ML-KEM). Awaiting NIST FIPS finalization (expected late 2026 / early 2027).
+* **HQC KEM FIPS finalization** - HQC-128/192/256 are available as experimental KEMs (build tag `hqc`). The `Experimental` gate will be removed once NIST publishes FIPS 207 (expected late 2026 / early 2027).
 * **China NGCC algorithms** - China's [Next-Generation Commercial Cryptographic Algorithms Program](https://www.niccs.org.cn/en/) (NGCC, launched February 2025) is running its own PQC standardization independently of NIST, with submissions closing June 2026 and algorithm selections expected 2027-2028. go-clatter's modular architecture (CipherSuite, ParamSetFuncs interface) is designed to accommodate new KEM and signature algorithms as they are standardized, regardless of origin.
 
 ## Dependencies
@@ -293,6 +333,7 @@ The SLH-DSA package includes 1,452 ACVP/BLAKE3 vectors across all 18 parameter s
 | `golang.org/x/crypto` | ChaCha20-Poly1305, BLAKE2, SHA3/SHAKE |
 | [`filippo.io/mldsa`](https://pkg.go.dev/filippo.io/mldsa) | ML-DSA-65 signing. Pre-release of Go's upcoming `crypto/mldsa` stdlib package, maintained by [Filippo Valsorda](https://filippo.io). Migration to stdlib is a single import path change when `crypto/mldsa` ships (proposal [#77626](https://github.com/golang/go/issues/77626) accepted). |
 | [`lukechampine.com/blake3`](https://pkg.go.dev/lukechampine.com/blake3) | SLH-DSA BLAKE3 param sets. Pure Go + SIMD assembly for amd64/arm64. |
+| [`github.com/shurlinet/go-hqc`](https://pkg.go.dev/github.com/shurlinet/go-hqc) | HQC KEM (experimental, build tag `hqc`). NIST backup KEM. |
 
 ## Acknowledgments
 
@@ -315,7 +356,7 @@ Thanks to [Luke Champine](https://github.com/lukechampine) for [lukechampine.com
 
 ## AI Transparency
 
-This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 26,000+ handshakes, 408 cross-implementation vectors, 1,452 NIST/PQC-Suite-B vectors, and 11 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
+This Go port was written with AI assistance ([Claude](https://claude.ai)) and reviewed by a human. All code is verified against the Rust reference implementation byte-for-byte, and tested with 26,000+ handshakes, 408 cross-implementation vectors, 1,452 NIST/PQC-Suite-B vectors, and 13 fuzz targets. The AI generated code; the human made every design decision, reviewed every line, and owns every bug.
 
 ## License
 

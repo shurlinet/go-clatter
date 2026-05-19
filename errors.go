@@ -39,4 +39,7 @@ var (
 
 	// Key errors
 	ErrInvalidKeyLength = errors.New("clatter: invalid key length")
+
+	// Experimental gate errors
+	ErrExperimentalNotAllowed = errors.New("clatter: experimental algorithm requires AllowExperimental")
 )

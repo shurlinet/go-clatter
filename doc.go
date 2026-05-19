@@ -7,7 +7,8 @@
 //
 // Cryptographic primitives:
 //   - DH: X25519 (crypto/ecdh)
-//   - KEM: ML-KEM-768, ML-KEM-1024 (crypto/mlkem, FIPS 203)
+//   - KEM: ML-KEM-768, ML-KEM-1024 (crypto/mlkem, FIPS 203);
+//     HQC-128, HQC-192, HQC-256 (go-hqc, experimental, build tag "hqc")
 //   - Cipher: ChaCha20-Poly1305 (x/crypto), AES-256-GCM (crypto/aes)
 //   - Hash: SHA-256, SHA-512 (crypto/sha256, crypto/sha512), BLAKE2s, BLAKE2b (x/crypto)
 //
@@ -37,4 +38,14 @@
 // every message in the pattern, returning a descriptive error if not.
 // TransportState inherits the limit from the handshake that created it.
 // Use TransportState.MaxMessageLen() to query the active limit.
+//
+// # Experimental Algorithms
+//
+// Pre-FIPS algorithms (HQC) require two deliberate opt-ins: the "hqc" build
+// tag at compile time and [AllowExperimental] set to true at runtime. Without
+// the build tag, HQC code is excluded from the binary entirely. Without the
+// runtime flag, every HQC KEM operation returns [ErrExperimentalNotAllowed].
+// Handshake constructors also reject [CipherSuite] values with Experimental
+// set to true unless AllowExperimental is enabled. These gates will be
+// relaxed as the algorithms progress through FIPS standardization.
 package clatter
