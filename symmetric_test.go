@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"errors"
 	"testing"
 )
 
@@ -564,5 +565,74 @@ func TestSymmetricState_ChainingKeyIsCopy(t *testing.T) {
 	ck2 := ss.ChainingKey()
 	if ck2[0] == 0xff {
 		t.Fatal("ChainingKey returned reference, not copy")
+	}
+}
+
+// TestSymmetricState_DestroyLatchesError verifies Destroy puts the state
+// into a permanent error state. Without the latch, a destroyed state
+// silently degrades to keyless mode and EncryptAndHash returns the
+// plaintext verbatim as "ciphertext".
+func TestSymmetricState_DestroyLatchesError(t *testing.T) {
+	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "Noise_NN_25519_TestCipher_SHA256")
+	ss.Destroy()
+
+	if err := ss.Err(); !errors.Is(err, ErrDestroyed) {
+		t.Fatalf("Err after Destroy: got %v, want ErrDestroyed", err)
+	}
+
+	secret := []byte("do not leak this")
+	ct, err := ss.EncryptAndHash(secret)
+	if err == nil {
+		t.Fatalf("EncryptAndHash after Destroy returned data (%d bytes) with nil error: plaintext-as-ciphertext", len(ct))
+	}
+	if !errors.Is(err, ErrDestroyed) {
+		t.Fatalf("EncryptAndHash after Destroy: got %v, want ErrDestroyed", err)
+	}
+	if _, err := ss.DecryptAndHash([]byte("anything at all")); !errors.Is(err, ErrDestroyed) {
+		t.Fatalf("DecryptAndHash after Destroy: got %v, want ErrDestroyed", err)
+	}
+}
+
+// TestSymmetricState_DestroyPreservesPriorError verifies that a sticky
+// error set before Destroy is not overwritten by the ErrDestroyed latch.
+func TestSymmetricState_DestroyPreservesPriorError(t *testing.T) {
+	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "Noise_NN_25519_TestCipher_SHA256")
+	ss.SetError(ErrDecrypt) // SetError destroys internally
+	ss.Destroy()            // explicit second destroy must not overwrite
+
+	if err := ss.Err(); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("Err: got %v, want original ErrDecrypt preserved", err)
+	}
+}
+
+// TestSymmetricState_GettersAndMixHashAfterError verifies the error-state
+// guards: getters return nil (never a digest of zeroed state) and MixHash
+// is a no-op.
+func TestSymmetricState_GettersAndMixHashAfterError(t *testing.T) {
+	ss := InitializeSymmetric(&testSha256{}, &testCipher{}, "Noise_NN_25519_TestCipher_SHA256")
+
+	// Live state: getters return data.
+	if ss.GetHandshakeHash() == nil {
+		t.Fatal("GetHandshakeHash nil on live state")
+	}
+	if ss.ChainingKey() == nil {
+		t.Fatal("ChainingKey nil on live state")
+	}
+
+	ss.Destroy()
+
+	if got := ss.GetHandshakeHash(); got != nil {
+		t.Fatalf("GetHandshakeHash after Destroy: got %x, want nil (digest of zeroed state)", got)
+	}
+	if got := ss.ChainingKey(); got != nil {
+		t.Fatalf("ChainingKey after Destroy: got %x, want nil", got)
+	}
+
+	// MixHash must be a no-op: h stays zeroed.
+	ss.MixHash([]byte("garbage"))
+	for i, b := range ss.h {
+		if b != 0 {
+			t.Fatalf("MixHash mutated destroyed state at h[%d]=%x", i, b)
+		}
 	}
 }

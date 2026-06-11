@@ -1,6 +1,9 @@
 package clatter
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // TransportState holds post-handshake encryption keys for secure communication.
 // Port of Rust Clatter's transportstate.rs.
@@ -10,6 +13,19 @@ import "fmt"
 // responder may receive. SetReceivingNonce is provided for nonce synchronization;
 // SetSendingNonce is intentionally absent (callers should not manipulate outbound
 // nonces). Rekey rotates the cipher key without resetting the nonce counter.
+//
+// # Concurrency
+//
+// Full-duplex use is supported: ONE goroutine may send while ONE goroutine
+// receives (the directions use independent CipherStates). Concurrent use
+// within a direction is rejected with ErrConcurrentUse by an atomic guard:
+// two concurrent Sends would otherwise race the nonce counter and could
+// emit two ciphertexts under the same key and nonce, which is a complete
+// AEAD break. The guard exists because this type resembles a net.Conn
+// (which permits concurrent writes); it fails loudly instead.
+//
+// All other methods (Destroy, Take, nonce accessors, GetHandshakeHash)
+// require external synchronization with any in-flight Send/Receive.
 type TransportState struct {
 	initiatorToResponder *CipherState
 	responderToInitiator *CipherState
@@ -18,6 +34,36 @@ type TransportState struct {
 	maxMsgLen            int    // per-session message length limit
 	initiator            bool
 	destroyed            bool
+
+	// Per-direction atomic guards against concurrent use (see Concurrency).
+	sendInUse atomic.Uint32
+	recvInUse atomic.Uint32
+}
+
+// acquireSend acquires exclusive access to the sending direction.
+func (ts *TransportState) acquireSend() error {
+	if !ts.sendInUse.CompareAndSwap(0, 1) {
+		return ErrConcurrentUse
+	}
+	return nil
+}
+
+// releaseSend releases exclusive access to the sending direction.
+func (ts *TransportState) releaseSend() {
+	ts.sendInUse.Store(0)
+}
+
+// acquireRecv acquires exclusive access to the receiving direction.
+func (ts *TransportState) acquireRecv() error {
+	if !ts.recvInUse.CompareAndSwap(0, 1) {
+		return ErrConcurrentUse
+	}
+	return nil
+}
+
+// releaseRecv releases exclusive access to the receiving direction.
+func (ts *TransportState) releaseRecv() {
+	ts.recvInUse.Store(0)
 }
 
 // newTransportState creates a TransportState from a completed handshake's components.
@@ -46,7 +92,13 @@ func (ts *TransportState) MaxMessageLen() int {
 // or when a responder attempts to send on a one-way pattern.
 // If the payload is too large, the caller must fragment at the application
 // layer. TransportState does not perform fragmentation.
+// Returns ErrConcurrentUse if another goroutine is sending.
 func (ts *TransportState) Send(payload, out []byte) (int, error) {
+	if err := ts.acquireSend(); err != nil {
+		return 0, err
+	}
+	defer ts.releaseSend()
+
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
@@ -81,7 +133,13 @@ func (ts *TransportState) Send(payload, out []byte) (int, error) {
 // Returns total ciphertext length (msgLen + TagLen).
 // The buffer must have room for msgLen + TagLen bytes.
 // Used by DualLayer to wrap inner handshake messages with outer transport.
+// Returns ErrConcurrentUse if another goroutine is sending.
 func (ts *TransportState) SendInPlace(msg []byte, msgLen int) (int, error) {
+	if err := ts.acquireSend(); err != nil {
+		return 0, err
+	}
+	defer ts.releaseSend()
+
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
@@ -109,7 +167,13 @@ func (ts *TransportState) SendInPlace(msg []byte, msgLen int) (int, error) {
 // Receive decrypts a message from the remote party.
 // Returns error when message exceeds the session message length limit,
 // or when an initiator attempts to receive on a one-way pattern.
+// Returns ErrConcurrentUse if another goroutine is receiving.
 func (ts *TransportState) Receive(message, out []byte) (int, error) {
+	if err := ts.acquireRecv(); err != nil {
+		return 0, err
+	}
+	defer ts.releaseRecv()
+
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
@@ -144,7 +208,13 @@ func (ts *TransportState) Receive(message, out []byte) (int, error) {
 
 // ReceiveInPlace decrypts msgLen bytes in msg in-place.
 // Returns plaintext length (msgLen - TagLen).
+// Returns ErrConcurrentUse if another goroutine is receiving.
 func (ts *TransportState) ReceiveInPlace(msg []byte, msgLen int) (int, error) {
+	if err := ts.acquireRecv(); err != nil {
+		return 0, err
+	}
+	defer ts.releaseRecv()
+
 	if ts.destroyed {
 		return 0, ErrDestroyed
 	}
@@ -192,16 +262,35 @@ func (ts *TransportState) ReceivingNonce() uint64 {
 // SetReceivingNonce sets the forthcoming inbound nonce value.
 // Only the receiving nonce may be set; the sending nonce is intentionally
 // read-only to prevent callers from desynchronizing the outbound stream.
-func (ts *TransportState) SetReceivingNonce(nonce uint64) {
-	cs := ts.receiveCipher()
-	if cs != nil {
-		cs.setNonce(nonce)
+// Returns ErrConcurrentUse if another goroutine is receiving, and
+// ErrDestroyed after Destroy/Take. The error return may be ignored by
+// callers that guarantee exclusive access.
+func (ts *TransportState) SetReceivingNonce(nonce uint64) error {
+	if err := ts.acquireRecv(); err != nil {
+		return err
 	}
+	defer ts.releaseRecv()
+
+	if ts.destroyed {
+		return ErrDestroyed
+	}
+	cs := ts.receiveCipher()
+	if cs == nil {
+		return ErrMissingKey
+	}
+	cs.setNonce(nonce)
+	return nil
 }
 
 // RekeySender rekeys the outbound cipher.
 // The nonce counter is NOT reset - rekeying only rotates the key material.
+// Returns ErrConcurrentUse if another goroutine is sending.
 func (ts *TransportState) RekeySender() error {
+	if err := ts.acquireSend(); err != nil {
+		return err
+	}
+	defer ts.releaseSend()
+
 	if ts.destroyed {
 		return ErrDestroyed
 	}
@@ -214,7 +303,13 @@ func (ts *TransportState) RekeySender() error {
 
 // RekeyReceiver rekeys the inbound cipher.
 // The nonce counter is NOT reset - rekeying only rotates the key material.
+// Returns ErrConcurrentUse if another goroutine is receiving.
 func (ts *TransportState) RekeyReceiver() error {
+	if err := ts.acquireRecv(); err != nil {
+		return err
+	}
+	defer ts.releaseRecv()
+
 	if ts.destroyed {
 		return ErrDestroyed
 	}

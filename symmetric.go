@@ -67,7 +67,13 @@ func (ss *SymmetricState) checkErr() error {
 
 // MixHash updates h = Hash(h || data).
 // Intermediate buffer zeroed after hashing (contains handshake state).
+// No-op once the state is in error state or destroyed: the hash has been
+// zeroed, and mixing into a zeroed h would produce a plausible-looking but
+// meaningless transcript.
 func (ss *SymmetricState) MixHash(data []byte) {
+	if ss.err != nil {
+		return
+	}
 	combined := make([]byte, ss.hashLen+len(data))
 	copy(combined, ss.h[:ss.hashLen])
 	copy(combined[ss.hashLen:], data)
@@ -289,7 +295,13 @@ func (ss *SymmetricState) Split() (cs1, cs2 *CipherState, err error) {
 }
 
 // GetHandshakeHash returns a copy of the current handshake hash h.
+// Returns nil once the state is in error state or destroyed: the hash has
+// been zeroed, and a digest of zeroed state must never be used for channel
+// binding.
 func (ss *SymmetricState) GetHandshakeHash() []byte {
+	if ss.err != nil {
+		return nil
+	}
 	out := make([]byte, ss.hashLen)
 	copy(out, ss.h[:ss.hashLen])
 	return out
@@ -297,7 +309,11 @@ func (ss *SymmetricState) GetHandshakeHash() []byte {
 
 // ChainingKey returns a copy of the current chaining key ck.
 // The caller MUST zero the returned slice when done - ck is secret keying material.
+// Returns nil once the state is in error state or destroyed.
 func (ss *SymmetricState) ChainingKey() []byte {
+	if ss.err != nil {
+		return nil
+	}
 	out := make([]byte, ss.hashLen)
 	copy(out, ss.ck[:ss.hashLen])
 	return out
@@ -316,7 +332,13 @@ func (ss *SymmetricState) Err() error {
 }
 
 // Destroy zeros all secret state in the SymmetricState,
-// including h, ck, and the CipherState.
+// including h, ck, and the CipherState, and latches the error state to
+// ErrDestroyed (unless a sticky error is already set, which is preserved).
+//
+// The latch makes every subsequent operation fail loudly. Without it, a
+// destroyed state silently degrades to keyless mode: EncryptAndHash would
+// return the plaintext verbatim as "ciphertext", indistinguishable from a
+// legitimate pre-key Noise message.
 func (ss *SymmetricState) Destroy() {
 	for i := range ss.h {
 		ss.h[i] = 0
@@ -327,5 +349,8 @@ func (ss *SymmetricState) Destroy() {
 	if ss.cs != nil {
 		ss.cs.Destroy()
 		ss.cs = nil
+	}
+	if ss.err == nil {
+		ss.err = ErrDestroyed
 	}
 }

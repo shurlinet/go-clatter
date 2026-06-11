@@ -285,6 +285,48 @@ func TestHandshakeInternals_ConcurrentUseRace(t *testing.T) {
 	}
 }
 
+// TestHandshakeInternals_AccessorsGuarded verifies the public read
+// accessors respect the concurrency guard: while another goroutine holds
+// the handshake, IsFinished/IsWriteTurn return false and GetHandshakeHash
+// returns nil instead of racing in-flight state.
+func TestHandshakeInternals_AccessorsGuarded(t *testing.T) {
+	h := &HandshakeInternals{
+		status:         StatusReady,
+		symmetricState: InitializeSymmetric(&testSha256{}, &testCipher{}, "test"),
+	}
+
+	// Unguarded: accessors report real state.
+	if !h.IsFinished() {
+		t.Fatal("IsFinished false on ready, unheld handshake")
+	}
+	if h.GetHandshakeHash() == nil {
+		t.Fatal("GetHandshakeHash nil on live, unheld handshake")
+	}
+
+	// Guard held by "another goroutine": accessors refuse to race.
+	if err := h.acquireUse(); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if h.IsFinished() {
+		t.Error("IsFinished returned true while handshake held")
+	}
+	if h.IsWriteTurn() {
+		t.Error("IsWriteTurn returned true while handshake held")
+	}
+	if got := h.GetHandshakeHash(); got != nil {
+		t.Errorf("GetHandshakeHash returned %x while handshake held, want nil", got)
+	}
+	h.releaseUse()
+
+	// Released: real state again.
+	if !h.IsFinished() {
+		t.Fatal("IsFinished false after release")
+	}
+	if h.GetHandshakeHash() == nil {
+		t.Fatal("GetHandshakeHash nil after release")
+	}
+}
+
 // TestHandshakeInternals_CheckState verifies state checks.
 func TestHandshakeInternals_CheckState(t *testing.T) {
 	h := &HandshakeInternals{status: StatusSend}

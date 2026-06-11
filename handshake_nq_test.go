@@ -3,9 +3,11 @@ package clatter_test
 import (
 	"bufio"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	clatter "github.com/shurlinet/go-clatter"
@@ -1100,4 +1102,92 @@ func verifyTransport(t *testing.T, tsI, tsR *clatter.TransportState) {
 			t.Fatalf("transport[%d]: got %q, want %q", i, payloadBuf[:pn], m.payload)
 		}
 	}
+}
+
+// TestNqHandshake_ConcurrentAccessorsRaceFree drives a handshake while
+// other goroutines hammer the public read accessors. Before the accessor
+// guards, GetHandshakeHash could race setError nilling the symmetric
+// state; the race detector is the oracle here. Accessor results must be
+// coherent (nil or a full-length hash), never torn.
+func TestNqHandshake_ConcurrentAccessorsRaceFree(t *testing.T) {
+	suite := suiteChachaSha256()
+
+	alice, err := clatter.NewNqHandshake(clatter.PatternNN, true, suite)
+	if err != nil {
+		t.Fatalf("alice: %v", err)
+	}
+	defer alice.Destroy()
+	bob, err := clatter.NewNqHandshake(clatter.PatternNN, false, suite)
+	if err != nil {
+		t.Fatalf("bob: %v", err)
+	}
+	defer bob.Destroy()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if h := alice.GetHandshakeHash(); h != nil && len(h) != 32 {
+					t.Errorf("torn handshake hash: %d bytes", len(h))
+					return
+				}
+				alice.IsFinished()
+				alice.IsWriteTurn()
+				if _, err := alice.GetNextMessageOverhead(); err != nil &&
+					!errorsIsAny(err, clatter.ErrConcurrentUse, clatter.ErrInvalidState, clatter.ErrAlreadyFinished, clatter.ErrErrorState) {
+					t.Errorf("unexpected accessor error: %v", err)
+					return
+				}
+			}
+		}()
+	}
+
+	// Handshake ops share the same single-goroutine guard as the
+	// accessors, so an op can transiently lose the race to a concurrent
+	// accessor with ErrConcurrentUse (the documented fail-loud contract).
+	// Retry on contention; any other error is fatal.
+	retry := func(label string, op func() (int, error)) int {
+		for {
+			n, err := op()
+			if err == nil {
+				return n
+			}
+			if !errors.Is(err, clatter.ErrConcurrentUse) {
+				t.Fatalf("%s: %v", label, err)
+			}
+		}
+	}
+
+	buf := make([]byte, 4096)
+	out := make([]byte, 4096)
+	n := retry("alice write", func() (int, error) { return alice.WriteMessage(nil, buf) })
+	retry("bob read", func() (int, error) { return bob.ReadMessage(buf[:n], out) })
+	n = retry("bob write", func() (int, error) { return bob.WriteMessage(nil, buf) })
+	retry("alice read", func() (int, error) { return alice.ReadMessage(buf[:n], out) })
+
+	close(stop)
+	wg.Wait()
+
+	// Single-goroutine again: accessors must report completion.
+	if !alice.IsFinished() {
+		t.Fatal("alice not finished")
+	}
+}
+
+// errorsIsAny reports whether err matches any of the given targets.
+func errorsIsAny(err error, targets ...error) bool {
+	for _, target := range targets {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }

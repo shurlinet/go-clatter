@@ -244,17 +244,43 @@ func (h *HandshakeInternals) notifyError(event HandshakeErrorEvent) {
 }
 
 // IsFinished returns true when the handshake is complete.
+// Returns false while another goroutine holds the handshake (a racing read
+// of in-flight state would be meaningless); poll again after the operation
+// completes.
 func (h *HandshakeInternals) IsFinished() bool {
+	if err := h.acquireUse(); err != nil {
+		return false
+	}
+	defer h.releaseUse()
 	return h.status == StatusReady
 }
 
 // IsWriteTurn returns true when it's our turn to send a message.
+// Returns false while another goroutine holds the handshake; poll again
+// after the operation completes.
 func (h *HandshakeInternals) IsWriteTurn() bool {
+	if err := h.acquireUse(); err != nil {
+		return false
+	}
+	defer h.releaseUse()
 	return h.status == StatusSend
 }
 
 // GetHandshakeHash returns a copy of the current handshake hash.
+// Returns nil while another goroutine holds the handshake: the hash of an
+// in-flight operation must never be used for channel binding.
 func (h *HandshakeInternals) GetHandshakeHash() []byte {
+	if err := h.acquireUse(); err != nil {
+		return nil
+	}
+	defer h.releaseUse()
+	return h.handshakeHash()
+}
+
+// handshakeHash returns a copy of the current handshake hash without
+// acquiring the concurrency guard. For internal use on paths that already
+// hold the guard (observer events, Finalize).
+func (h *HandshakeInternals) handshakeHash() []byte {
 	if h.symmetricState == nil {
 		return nil
 	}

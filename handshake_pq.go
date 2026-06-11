@@ -313,7 +313,7 @@ func (hs *PqHandshake) WriteMessage(payload, out []byte) (int, error) {
 		HandshakeType: TypePQ,
 		IsInitiator:   hs.initiator,
 		ProtocolName:  hs.protocolName,
-		HandshakeHash: hs.GetHandshakeHash(),
+		HandshakeHash: hs.handshakeHash(),
 		PayloadLen:    len(payload),
 	})
 	hs.msgIndex++
@@ -411,7 +411,7 @@ func (hs *PqHandshake) ReadMessage(message, out []byte) (int, error) {
 		HandshakeType:      TypePQ,
 		IsInitiator:        hs.initiator,
 		ProtocolName:       hs.protocolName,
-		HandshakeHash:      hs.GetHandshakeHash(),
+		HandshakeHash:      hs.handshakeHash(),
 		PayloadLen:         payloadLen,
 		RemoteEphemeralKEM: learnedREKEM,
 		RemoteStaticKEM:    learnedRSKEM,
@@ -465,7 +465,12 @@ func (hs *PqHandshake) Finalize() (*TransportState, error) {
 }
 
 // GetNextMessageOverhead returns the byte overhead for the next message.
+// Returns ErrConcurrentUse if another goroutine holds the handshake.
 func (hs *PqHandshake) GetNextMessageOverhead() (int, error) {
+	if err := hs.acquireUse(); err != nil {
+		return 0, err
+	}
+	defer hs.releaseUse()
 	if err := hs.checkState(); err != nil {
 		return 0, err
 	}
