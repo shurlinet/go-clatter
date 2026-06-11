@@ -636,3 +636,63 @@ func TestSymmetricState_GettersAndMixHashAfterError(t *testing.T) {
 		}
 	}
 }
+
+// hostileHash reports a hash length larger than its block length, which
+// violates the Noise invariant (ck is hashLen bytes and must fit the HMAC
+// block) and forces hmacHash to reject the chaining key.
+type hostileHash struct{ testSha256 }
+
+func (h *hostileHash) HashLen() int  { return 64 }
+func (h *hostileHash) BlockLen() int { return 32 }
+
+// TestSymmetricState_MixKeyFailureLatches exercises the mutate-then-fail
+// latch: when the key mix fails, the state must enter permanent error
+// state instead of remaining usable with half-transitioned internals.
+func TestSymmetricState_MixKeyFailureLatches(t *testing.T) {
+	for name, mix := range map[string]func(*SymmetricState, []byte) error{
+		"MixKey":        (*SymmetricState).MixKey,
+		"MixKeyAndHash": (*SymmetricState).MixKeyAndHash,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ss := InitializeSymmetric(&hostileHash{}, &testCipher{}, "hostile")
+			if err := mix(ss, []byte("ikm")); err == nil {
+				t.Fatal("hostile hash key mix succeeded")
+			}
+			if ss.Err() == nil {
+				t.Fatal("failed key mix did not latch the error state")
+			}
+			if _, err := ss.EncryptAndHash([]byte("secret")); err == nil {
+				t.Fatal("EncryptAndHash usable after failed key mix")
+			}
+			if ss.GetHandshakeHash() != nil {
+				t.Fatal("GetHandshakeHash returned data after failed key mix")
+			}
+		})
+	}
+}
+
+// shortWriteHash returns an HMAC writer that silently short-writes,
+// exercising hmacHash's write verification.
+type shortWriteHash struct{ testSha256 }
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return len(p) - 1, nil
+}
+func (shortWriter) Sum() []byte { return make([]byte, 32) }
+
+func (h *shortWriteHash) NewHMAC(key []byte) HMACWriter { return shortWriter{} }
+
+// TestHmacHash_ShortWriteRejected verifies hmacHash refuses an HMAC
+// implementation that short-writes: silently deriving keys from
+// truncated input must be impossible.
+func TestHmacHash_ShortWriteRejected(t *testing.T) {
+	_, err := hmacHash(&shortWriteHash{}, make([]byte, 32), []byte("input data"))
+	if err == nil {
+		t.Fatal("hmacHash accepted a short write")
+	}
+}

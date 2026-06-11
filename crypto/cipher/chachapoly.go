@@ -2,6 +2,7 @@
 package cipher
 
 import (
+	gocipher "crypto/cipher"
 	"encoding/binary"
 	"fmt"
 
@@ -53,6 +54,42 @@ func (c *ChaChaPoly) Decrypt(key [32]byte, nonce uint64, ad, ciphertext, out []b
 	}
 	n := chachaPolyNonce(nonce)
 	result, err := aead.Open(out[:0], n[:], ciphertext, ad)
+	if err != nil {
+		return nil, clatter.ErrDecrypt
+	}
+	return result, nil
+}
+
+// Compile-time check: ChaChaPoly provides the keyed fast path.
+var _ clatter.KeyedCipher = (*ChaChaPoly)(nil)
+
+// NewKeyed returns a ChaCha20-Poly1305 AEAD bound to key, letting
+// CipherState skip per-message cipher construction. Output is
+// byte-identical to the stateless Encrypt/Decrypt methods.
+func (c *ChaChaPoly) NewKeyed(key [32]byte) (clatter.KeyedAEAD, error) {
+	aead, err := chacha20poly1305.New(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", clatter.ErrCipher, err)
+	}
+	return &keyedChaChaPoly{aead: aead}, nil
+}
+
+// keyedChaChaPoly is a ChaCha20-Poly1305 AEAD bound to a fixed key.
+type keyedChaChaPoly struct {
+	aead gocipher.AEAD
+}
+
+// Encrypt encrypts plaintext with the bound key (little-endian nonce).
+func (k *keyedChaChaPoly) Encrypt(nonce uint64, ad, plaintext, out []byte) ([]byte, error) {
+	n := chachaPolyNonce(nonce)
+	return k.aead.Seal(out[:0], n[:], plaintext, ad), nil
+}
+
+// Decrypt decrypts ciphertext with the bound key (little-endian nonce).
+// Returns [clatter.ErrDecrypt] on authentication failure.
+func (k *keyedChaChaPoly) Decrypt(nonce uint64, ad, ciphertext, out []byte) ([]byte, error) {
+	n := chachaPolyNonce(nonce)
+	result, err := k.aead.Open(out[:0], n[:], ciphertext, ad)
 	if err != nil {
 		return nil, clatter.ErrDecrypt
 	}

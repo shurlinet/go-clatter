@@ -24,6 +24,10 @@ import "fmt"
 // Multiple data slices are written sequentially (equivalent to concatenation),
 // matching Clatter's hmac_many(key, &[out1, &[2u8]]) pattern.
 // Returns error if key exceeds the hash block length.
+//
+// Every Write is verified (count and error): stdlib HMAC cannot fail, but
+// HashFunc is an interface and a custom implementation that short-writes
+// would silently derive keys from truncated input.
 func hmacHash(h HashFunc, key []byte, data ...[]byte) ([]byte, error) {
 	if len(key) > h.BlockLen() {
 		return nil, fmt.Errorf("%w: HMAC key length %d exceeds block length %d",
@@ -31,7 +35,14 @@ func hmacHash(h HashFunc, key []byte, data ...[]byte) ([]byte, error) {
 	}
 	mac := h.NewHMAC(key)
 	for _, d := range data {
-		mac.Write(d)
+		n, err := mac.Write(d)
+		if err != nil {
+			return nil, fmt.Errorf("%w: HMAC write: %v", ErrCipher, err)
+		}
+		if n != len(d) {
+			return nil, fmt.Errorf("%w: HMAC short write: %d of %d bytes",
+				ErrCipher, n, len(d))
+		}
 	}
 	return mac.Sum(), nil
 }

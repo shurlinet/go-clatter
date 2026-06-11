@@ -474,6 +474,12 @@ func WithPrologue(data []byte) Option {
 
 // WithRNG sets the random number generator (default: crypto/rand.Reader).
 // Injectable for deterministic testing with DummyRng.
+//
+// Scope caveat: rng feeds key GENERATION (DH ephemerals, KEM keypair
+// seeds). Production ML-KEM ENCAPSULATION ignores it and uses Go's
+// internal CSPRNG; only the *Testing KEM variants draw encapsulation
+// entropy from rng. Fully deterministic handshakes therefore require
+// the Testing KEM constructors in the CipherSuite as well.
 func WithRNG(rng RNG) Option {
 	return func(o *handshakeOptions) {
 		o.rng = rng

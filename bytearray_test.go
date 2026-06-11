@@ -327,3 +327,23 @@ func TestPSKQueue_Destroy(t *testing.T) {
 		}
 	}
 }
+
+// TestSecretKeyEqual_NilOther verifies Equal returns false (not panic)
+// when the other key is nil.
+func TestSecretKeyEqual_NilOther(t *testing.T) {
+	k32, err := NewSecretKey32(make([]byte, KeyLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k32.Equal(nil) {
+		t.Fatal("SecretKey32.Equal(nil) returned true")
+	}
+
+	k64, err := NewSecretKey64(make([]byte, MaxHashLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k64.Equal(nil) {
+		t.Fatal("SecretKey64.Equal(nil) returned true")
+	}
+}

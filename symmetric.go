@@ -98,7 +98,10 @@ func (ss *SymmetricState) MixKey(ikm []byte) error {
 	newCk, tempK, err := HKDF2(ss.hash, ckCopy, ikm)
 	zeroSlice(ckCopy)
 	if err != nil {
-		return fmt.Errorf("MixKey: %w", err)
+		// Latch: a failed key-mix leaves no safe way to continue.
+		err = fmt.Errorf("MixKey: %w", err)
+		ss.SetError(err)
+		return err
 	}
 
 	// Update ck
@@ -119,7 +122,11 @@ func (ss *SymmetricState) MixKey(ikm []byte) error {
 	ss.cs, err = NewCipherState(ss.cipher, tempK)
 	zeroSlice(tempK)
 	if err != nil {
-		return fmt.Errorf("MixKey: %w", err)
+		// Latch: ck was already mutated and the old CipherState
+		// destroyed; the state is half-transitioned and unusable.
+		err = fmt.Errorf("MixKey: %w", err)
+		ss.SetError(err)
+		return err
 	}
 
 	return nil
@@ -140,7 +147,10 @@ func (ss *SymmetricState) MixKeyAndHash(ikm []byte) error {
 	newCk, tempH, tempK, err := HKDF3(ss.hash, ckCopy, ikm)
 	zeroSlice(ckCopy)
 	if err != nil {
-		return fmt.Errorf("MixKeyAndHash: %w", err)
+		// Latch: a failed key-mix leaves no safe way to continue.
+		err = fmt.Errorf("MixKeyAndHash: %w", err)
+		ss.SetError(err)
+		return err
 	}
 
 	// Update ck
@@ -165,7 +175,11 @@ func (ss *SymmetricState) MixKeyAndHash(ikm []byte) error {
 	ss.cs, err = NewCipherState(ss.cipher, tempK)
 	zeroSlice(tempK)
 	if err != nil {
-		return fmt.Errorf("MixKeyAndHash: %w", err)
+		// Latch: ck and h were already mutated and the old CipherState
+		// destroyed; the state is half-transitioned and unusable.
+		err = fmt.Errorf("MixKeyAndHash: %w", err)
+		ss.SetError(err)
+		return err
 	}
 
 	return nil

@@ -58,7 +58,7 @@ Standalone signing modules. Not integrated into the Noise handshake - these are 
 ## Security
 
 * **Stdlib crypto** - All Noise handshake primitives use Go's standard library (`crypto/mlkem`, `crypto/ecdh`, `crypto/aes`) or `golang.org/x/crypto` (ChaCha20-Poly1305, BLAKE2). No hand-rolled cryptography.
-* **Secret zeroing** - All secret key material lives in fixed-size arrays with explicit `Destroy()` methods. Callers must call `Destroy()` when keys are no longer needed.
+* **Secret zeroing** - Every type holding secrets implements an explicit `Destroy()` method. Fixed-size secrets (cipher keys, chaining keys, PSKs) live in fixed-size arrays; variable-size KEM secrets live in heap slices that `Destroy()` zeroes in place. Callers must call `Destroy()` when keys are no longer needed.
 * **Errors, not panics** - All error conditions return Go `error` values. Invalid inputs, state violations, and crypto failures are handled through Go's standard error pattern.
 * **HKDF key derivation** - Manual HKDF implementation matching Noise spec (not a wrapper), with HMAC key length validation and full error propagation through HKDF2/HKDF3.
 * **Concurrency safety** - Handshake objects detect concurrent use via atomic guards and return errors. Transport ciphers use independent nonce counters per direction.

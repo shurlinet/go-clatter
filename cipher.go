@@ -22,7 +22,8 @@ type CipherState struct {
 	hasKey     bool
 	overflowed bool
 	destroyed  bool
-	cipher     Cipher // the raw AEAD implementation
+	cipher     Cipher    // the raw AEAD implementation
+	keyed      KeyedAEAD // cached keyed instance when cipher implements KeyedCipher
 }
 
 // NewCipherState creates a CipherState with the given key and nonce starting at 0.
@@ -31,6 +32,9 @@ type CipherState struct {
 // The caller is responsible for zeroing the source key slice after this call.
 // NewCipherState copies the key but does not zero the source, because Split
 // passes the same slice to two consecutive NewCipherState calls.
+//
+// If c implements KeyedCipher, the keyed AEAD is built once here (and on
+// Rekey) instead of running the key schedule on every message.
 func NewCipherState(c Cipher, key []byte) (*CipherState, error) {
 	if len(key) != KeyLen {
 		return nil, fmt.Errorf("%w: got %d bytes, want %d", ErrInvalidKeyLength, len(key), KeyLen)
@@ -41,7 +45,46 @@ func NewCipherState(c Cipher, key []byte) (*CipherState, error) {
 		cipher: c,
 	}
 	copy(cs.key[:], key)
+	if err := cs.rebuildKeyed(); err != nil {
+		cs.Destroy()
+		return nil, err
+	}
 	return cs, nil
+}
+
+// rebuildKeyed refreshes the cached keyed AEAD from the current key.
+// No-op (cache stays nil, stateless path used) when the cipher does not
+// implement KeyedCipher. Must be called after every key change.
+func (cs *CipherState) rebuildKeyed() error {
+	cs.keyed = nil
+	kc, ok := cs.cipher.(KeyedCipher)
+	if !ok {
+		return nil
+	}
+	keyed, err := kc.NewKeyed(cs.key)
+	if err != nil {
+		return fmt.Errorf("%w: keyed AEAD: %v", ErrCipher, err)
+	}
+	cs.keyed = keyed
+	return nil
+}
+
+// encrypt dispatches to the cached keyed AEAD when available, otherwise
+// to the stateless per-call path.
+func (cs *CipherState) encrypt(nonce uint64, ad, plaintext, out []byte) ([]byte, error) {
+	if cs.keyed != nil {
+		return cs.keyed.Encrypt(nonce, ad, plaintext, out)
+	}
+	return cs.cipher.Encrypt(cs.key, nonce, ad, plaintext, out)
+}
+
+// decrypt dispatches to the cached keyed AEAD when available, otherwise
+// to the stateless per-call path.
+func (cs *CipherState) decrypt(nonce uint64, ad, ciphertext, out []byte) ([]byte, error) {
+	if cs.keyed != nil {
+		return cs.keyed.Decrypt(nonce, ad, ciphertext, out)
+	}
+	return cs.cipher.Decrypt(cs.key, nonce, ad, ciphertext, out)
 }
 
 // HasKey returns true if a key has been set.
@@ -74,7 +117,7 @@ func (cs *CipherState) EncryptWithAd(ad, plaintext []byte) ([]byte, error) {
 	}
 
 	out := make([]byte, len(plaintext)+TagLen)
-	result, err := cs.cipher.Encrypt(cs.key, cs.nonce, ad, plaintext, out)
+	result, err := cs.encrypt(cs.nonce, ad, plaintext, out)
 	if err != nil {
 		zeroSlice(out)
 		return nil, err
@@ -115,7 +158,7 @@ func (cs *CipherState) DecryptWithAd(ad, ciphertext []byte) ([]byte, error) {
 	}
 
 	out := make([]byte, len(ciphertext))
-	result, err := cs.cipher.Decrypt(cs.key, cs.nonce, ad, ciphertext, out)
+	result, err := cs.decrypt(cs.nonce, ad, ciphertext, out)
 	if err != nil {
 		zeroSlice(out)
 		return nil, err
@@ -148,7 +191,7 @@ func (cs *CipherState) Rekey() error {
 
 	var zeros [KeyLen]byte
 	out := make([]byte, KeyLen+TagLen)
-	result, err := cs.cipher.Encrypt(cs.key, math.MaxUint64, nil, zeros[:], out)
+	result, err := cs.encrypt(math.MaxUint64, nil, zeros[:], out)
 	if err != nil {
 		zeroSlice(out)
 		return fmt.Errorf("%w: rekey failed: %v", ErrCipher, err)
@@ -157,6 +200,13 @@ func (cs *CipherState) Rekey() error {
 	// Take the first KeyLen bytes as the new key, discard the tag.
 	copy(cs.key[:], result[:KeyLen])
 	zeroSlice(out)
+
+	// The cached keyed AEAD is bound to the OLD key; rebuild it or every
+	// subsequent operation would silently keep using the old key.
+	if err := cs.rebuildKeyed(); err != nil {
+		cs.Destroy()
+		return err
+	}
 	return nil
 }
 
@@ -186,7 +236,7 @@ func (cs *CipherState) EncryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 	// Copy plaintext to a temporary buffer to avoid aliasing issues during encrypt.
 	plaintext := make([]byte, msgLen)
 	copy(plaintext, inOut[:msgLen])
-	_, err := cs.cipher.Encrypt(cs.key, cs.nonce, ad, plaintext, inOut[:outLen])
+	_, err := cs.encrypt(cs.nonce, ad, plaintext, inOut[:outLen])
 	zeroSlice(plaintext)
 	if err != nil {
 		return 0, err
@@ -227,7 +277,7 @@ func (cs *CipherState) DecryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 	ptLen := msgLen - TagLen
 	ciphertext := make([]byte, msgLen)
 	copy(ciphertext, inOut[:msgLen])
-	_, err := cs.cipher.Decrypt(cs.key, cs.nonce, ad, ciphertext, inOut[:ptLen])
+	_, err := cs.decrypt(cs.nonce, ad, ciphertext, inOut[:ptLen])
 	zeroSlice(ciphertext)
 	if err != nil {
 		return 0, err
@@ -267,6 +317,10 @@ func (cs *CipherState) Destroy() {
 	cs.hasKey = false
 	cs.overflowed = false
 	cs.cipher = nil
+	// The keyed AEAD holds expanded key material that cannot be zeroed
+	// explicitly; dropping the reference leaves it to the GC (documented
+	// on KeyedAEAD).
+	cs.keyed = nil
 	cs.destroyed = true
 }
 

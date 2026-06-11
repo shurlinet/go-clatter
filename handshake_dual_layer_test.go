@@ -1187,3 +1187,35 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestDualLayerHandshake_NegativeBufSize verifies a negative buffer size
+// is rejected with an error instead of panicking in make().
+func TestDualLayerHandshake_NegativeBufSize(t *testing.T) {
+	nqSuite := clatter.CipherSuite{
+		DH:     dh.NewX25519(),
+		Cipher: cipher.NewChaChaPoly(),
+		Hash:   hash.NewSha256(),
+	}
+	pqSuite := clatter.CipherSuite{
+		Cipher: cipher.NewChaChaPoly(),
+		Hash:   hash.NewSha256(),
+		EKEM:   kem.NewMlKem768(),
+		SKEM:   kem.NewMlKem768(),
+	}
+
+	outer, err := clatter.NewNqHandshake(clatter.PatternNN, true, nqSuite)
+	if err != nil {
+		t.Fatalf("outer: %v", err)
+	}
+	inner, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, pqSuite)
+	if err != nil {
+		t.Fatalf("inner: %v", err)
+	}
+
+	if _, err := clatter.NewDualLayerHandshake(outer, inner, -1); !errors.Is(err, clatter.ErrInvalidPattern) {
+		t.Fatalf("DualLayer negative bufSize: got %v, want ErrInvalidPattern", err)
+	}
+	if _, err := clatter.NewHybridDualLayerHandshake(outer, inner, -4096); !errors.Is(err, clatter.ErrInvalidPattern) {
+		t.Fatalf("HybridDualLayer negative bufSize: got %v, want ErrInvalidPattern", err)
+	}
+}

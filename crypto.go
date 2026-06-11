@@ -62,6 +62,37 @@ type HMACWriter interface {
 	Sum() []byte
 }
 
+// KeyedCipher is an optional interface a Cipher may implement so that
+// CipherState can build the keyed AEAD once per key instead of running
+// the key schedule on every message (AES key expansion and ChaCha state
+// setup are per-key work, not per-message work).
+//
+// Implementations must produce byte-identical output to their stateless
+// Encrypt/Decrypt methods for the same key, nonce, AD, and input. Ciphers
+// that do not implement this interface keep the stateless per-call path.
+type KeyedCipher interface {
+	Cipher
+	// NewKeyed returns an AEAD instance bound to key.
+	NewKeyed(key [32]byte) (KeyedAEAD, error)
+}
+
+// KeyedAEAD is an AEAD bound to a fixed key, produced by
+// KeyedCipher.NewKeyed. Nonce encoding is the implementation's
+// responsibility and must match its stateless counterpart.
+//
+// Note: the underlying AEAD holds expanded key material internally that
+// cannot be explicitly zeroed; dropping the reference (CipherState.Destroy)
+// leaves it to the garbage collector. This is inherent to wrapping
+// stdlib/x-crypto AEADs (same caveat as expanded signing keys).
+type KeyedAEAD interface {
+	// Encrypt encrypts plaintext with the bound key. Appends the tag.
+	// In-place: out may alias plaintext.
+	Encrypt(nonce uint64, ad, plaintext, out []byte) ([]byte, error)
+	// Decrypt decrypts ciphertext with the bound key.
+	// In-place: out may alias ciphertext.
+	Decrypt(nonce uint64, ad, ciphertext, out []byte) ([]byte, error)
+}
+
 // KEM abstracts a Key Encapsulation Mechanism (ML-KEM-768 or ML-KEM-1024).
 type KEM interface {
 	// Name returns the KEM name for protocol string construction.
@@ -70,7 +101,12 @@ type KEM interface {
 	// rng is used for deterministic testing (reads seed bytes).
 	GenerateKeypair(rng RNG) (KeyPair, error)
 	// Encapsulate generates a shared secret and ciphertext from a public key.
-	// rng is used for deterministic testing.
+	//
+	// rng is honored only by deterministic testing implementations (the
+	// *Testing KEM constructors). Production implementations (ML-KEM,
+	// HQC) IGNORE rng for encapsulation and draw entropy from the
+	// underlying library's internal CSPRNG. Do not assume WithRNG
+	// controls production encapsulation randomness.
 	Encapsulate(pk []byte, rng RNG) (ct, ss []byte, err error)
 	// Decapsulate recovers the shared secret from a ciphertext and secret key.
 	Decapsulate(ct, sk []byte) ([]byte, error)

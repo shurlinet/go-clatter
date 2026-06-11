@@ -65,3 +65,43 @@ func (a *AesGcm) Decrypt(key [32]byte, nonce uint64, ad, ciphertext, out []byte)
 	}
 	return result, nil
 }
+
+// Compile-time check: AesGcm provides the keyed fast path.
+var _ clatter.KeyedCipher = (*AesGcm)(nil)
+
+// NewKeyed returns an AES-256-GCM AEAD bound to key, letting CipherState
+// skip the per-message AES key expansion. Output is byte-identical to
+// the stateless Encrypt/Decrypt methods.
+func (a *AesGcm) NewKeyed(key [32]byte) (clatter.KeyedAEAD, error) {
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", clatter.ErrCipher, err)
+	}
+	aead, err := gocipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", clatter.ErrCipher, err)
+	}
+	return &keyedAesGcm{aead: aead}, nil
+}
+
+// keyedAesGcm is an AES-256-GCM AEAD bound to a fixed key.
+type keyedAesGcm struct {
+	aead gocipher.AEAD
+}
+
+// Encrypt encrypts plaintext with the bound key (big-endian nonce).
+func (k *keyedAesGcm) Encrypt(nonce uint64, ad, plaintext, out []byte) ([]byte, error) {
+	n := aesGcmNonce(nonce)
+	return k.aead.Seal(out[:0], n[:], plaintext, ad), nil
+}
+
+// Decrypt decrypts ciphertext with the bound key (big-endian nonce).
+// Returns [clatter.ErrDecrypt] on authentication failure.
+func (k *keyedAesGcm) Decrypt(nonce uint64, ad, ciphertext, out []byte) ([]byte, error) {
+	n := aesGcmNonce(nonce)
+	result, err := k.aead.Open(out[:0], n[:], ciphertext, ad)
+	if err != nil {
+		return nil, clatter.ErrDecrypt
+	}
+	return result, nil
+}

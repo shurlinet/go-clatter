@@ -12,9 +12,11 @@
 //   - Cipher: ChaCha20-Poly1305 (x/crypto), AES-256-GCM (crypto/aes)
 //   - Hash: SHA-256, SHA-512 (crypto/sha256, crypto/sha512), BLAKE2s, BLAKE2b (x/crypto)
 //
-// All secret key material is stored in fixed-size arrays ([32]byte, [64]byte)
-// that don't move during garbage collection. Every type holding secrets
-// implements Destroy() for explicit zeroing.
+// Fixed-size secrets (cipher keys, chaining keys, handshake hashes, PSKs)
+// are stored in fixed-size arrays ([32]byte, [64]byte) that don't move
+// during garbage collection. KeyPair secrets are heap-allocated slices
+// because KEM secret key sizes vary per algorithm (see KeyPair). Every
+// type holding secrets implements Destroy() for explicit zeroing.
 //
 // # Observability
 //

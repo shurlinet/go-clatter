@@ -50,8 +50,9 @@ func (s *SecretKey32) IsDestroyed() bool {
 }
 
 // Equal performs constant-time comparison of two SecretKey32 values.
+// Returns false if other is nil or either key is destroyed.
 func (s *SecretKey32) Equal(other *SecretKey32) bool {
-	if s.destroyed || other.destroyed {
+	if other == nil || s.destroyed || other.destroyed {
 		return false
 	}
 	return subtle.ConstantTimeCompare(s.key[:], other.key[:]) == 1
@@ -103,8 +104,9 @@ func (s *SecretKey64) IsDestroyed() bool {
 }
 
 // Equal performs constant-time comparison of two SecretKey64 values.
+// Returns false if other is nil or either key is destroyed.
 func (s *SecretKey64) Equal(other *SecretKey64) bool {
-	if s.destroyed || other.destroyed {
+	if other == nil || s.destroyed || other.destroyed {
 		return false
 	}
 	return subtle.ConstantTimeCompare(s.key[:], other.key[:]) == 1
@@ -112,6 +114,13 @@ func (s *SecretKey64) Equal(other *SecretKey64) bool {
 
 // KeyPair holds a public key (exported) and a secret key (unexported).
 // The secret is never directly accessible; use SecretSlice() for controlled access.
+//
+// The secret is a heap-allocated slice, not a fixed array: KEM secret key
+// sizes vary per algorithm (64-byte ML-KEM seeds, kilobytes for HQC), so a
+// fixed array cannot cover them without padding every keypair to the
+// largest. Destroy() zeroes the backing array in place; the residual risk
+// is only a future moving garbage collector leaving a stale copy behind
+// (Go's heap GC is currently non-moving).
 type KeyPair struct {
 	Public []byte
 	secret []byte

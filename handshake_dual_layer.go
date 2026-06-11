@@ -52,6 +52,13 @@ func NewDualLayerHandshake(outer, inner Handshaker, bufSize int, opts ...Option)
 
 // newDualLayerGeneric creates a dual-layer handshake validating role parity and one-way.
 func newDualLayerGeneric(outer, inner Handshaker, bufSize int, opts ...Option) (*DualLayerHandshake, error) {
+	// A negative bufSize would panic in make(); reject it as an error.
+	// (An undersized positive buffer fails safely at runtime with a
+	// bounds-checked Receive error.)
+	if bufSize < 0 {
+		return nil, fmt.Errorf("%w: bufSize must be non-negative, got %d", ErrInvalidPattern, bufSize)
+	}
+
 	outerInit := getInitiator(outer)
 	innerInit := getInitiator(inner)
 
