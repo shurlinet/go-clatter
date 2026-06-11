@@ -3,6 +3,8 @@ package dh
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"math/big"
 	"testing"
 
 	clatter "github.com/shurlinet/go-clatter"
@@ -93,4 +95,91 @@ func TestX25519_PubKeyLen(t *testing.T) {
 	if x.PubKeyLen() != 32 {
 		t.Fatalf("expected 32, got %d", x.PubKeyLen())
 	}
+}
+
+// TestX25519_DH_RejectsLowOrderPoints pins the low-order rejection
+// behavior: DH against a small-order peer public key returns
+// ErrDHLowOrder (the Noise spec section 4.1 permits either continuing
+// with output that is purely a function of the public key, or signaling
+// an error; go-clatter signals an error). Every small-order point forces
+// the X25519 shared secret to all-zero, which Go's crypto/ecdh rejects.
+//
+// Points: u=0, u=1, the two order-8 points, and p-1/p/p+1 computed from
+// p = 2^255 - 19 (p and p+1 are non-canonical encodings of 0 and 1).
+func TestX25519_DH_RejectsLowOrderPoints(t *testing.T) {
+	x := NewX25519()
+	kp, err := x.GenerateKeypair(clatter.NewDummyRng(0x1234))
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+
+	// p = 2^255 - 19, encoded little-endian as X25519 u-coordinates are.
+	p := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
+	le32 := func(v *big.Int) []byte {
+		out := make([]byte, 32)
+		v.FillBytes(out) // big-endian
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+		return out
+	}
+
+	lowOrder := map[string][]byte{
+		"u=0": make([]byte, 32),
+		"u=1": append([]byte{1}, make([]byte, 31)...),
+		"order-8 (e0eb..)": mustHex(t,
+			"e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"),
+		"order-8 (5f9c..)": mustHex(t,
+			"5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157"),
+		"u=p-1": le32(new(big.Int).Sub(p, big.NewInt(1))),
+		"u=p":   le32(p),
+		"u=p+1": le32(new(big.Int).Add(p, big.NewInt(1))),
+	}
+
+	for name, pub := range lowOrder {
+		ss, err := x.DH(kp, pub)
+		if err == nil {
+			t.Errorf("%s: DH accepted a small-order point (ss=%x)", name, ss)
+			continue
+		}
+		if !errors.Is(err, clatter.ErrDHLowOrder) {
+			t.Errorf("%s: got %v, want ErrDHLowOrder", name, err)
+		}
+		if ss != nil {
+			t.Errorf("%s: shared secret returned alongside error", name)
+		}
+	}
+}
+
+// TestX25519_DH_WrongLengthIsErrDH pins the sentinel wiring: a malformed
+// (wrong-length) peer public key is ErrDH, NOT ErrDHLowOrder.
+func TestX25519_DH_WrongLengthIsErrDH(t *testing.T) {
+	x := NewX25519()
+	kp, err := x.GenerateKeypair(clatter.NewDummyRng(0x5678))
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+
+	for _, n := range []int{0, 16, 31, 33, 64} {
+		_, err := x.DH(kp, make([]byte, n))
+		if err == nil {
+			t.Errorf("len %d: DH accepted wrong-length public key", n)
+			continue
+		}
+		if !errors.Is(err, clatter.ErrDH) {
+			t.Errorf("len %d: got %v, want ErrDH", n, err)
+		}
+		if errors.Is(err, clatter.ErrDHLowOrder) {
+			t.Errorf("len %d: wrong-length key mislabeled as low-order", n)
+		}
+	}
+}
+
+func mustHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("bad hex in test: %v", err)
+	}
+	return b
 }

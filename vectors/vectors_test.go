@@ -429,8 +429,14 @@ func TestCacophonyVectors(t *testing.T) {
 	t.Logf("Cacophony vectors: %d completed, %d skipped (total %d)",
 		completed, skipped, len(vf.Vectors))
 
-	if completed == 0 {
-		t.Fatal("no cacophony vectors completed")
+	// Pinned exact count: 288 of 944 run (the rest are Curve448 and
+	// deferred/fallback patterns, skipped the same as Rust Clatter). A
+	// bare completed > 0 floor would let a regression silently skip
+	// hundreds of vectors; any change to this number must be deliberate.
+	const wantCompleted = 288
+	if completed != wantCompleted {
+		t.Fatalf("cacophony vectors completed = %d, want exactly %d (skip set changed?)",
+			completed, wantCompleted)
 	}
 }
 
@@ -458,7 +464,13 @@ func TestSnowVectors(t *testing.T) {
 	t.Logf("Snow vectors: %d completed, %d skipped (total %d)",
 		completed, skipped, len(vf.Vectors))
 
-	if completed == 0 {
-		t.Fatal("no snow vectors completed")
+	// Pinned exact count: 120 of 408 run (the rest are Curve448 and
+	// deferred/fallback patterns, skipped the same as Rust Clatter). A
+	// bare completed > 0 floor would let a regression silently skip
+	// hundreds of vectors; any change to this number must be deliberate.
+	const wantCompleted = 120
+	if completed != wantCompleted {
+		t.Fatalf("snow vectors completed = %d, want exactly %d (skip set changed?)",
+			completed, wantCompleted)
 	}
 }

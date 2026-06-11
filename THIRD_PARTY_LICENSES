@@ -109,3 +109,14 @@ License: Public domain (U.S. Government work)
 
 NIST test vectors are works of the United States Government and are not
 subject to copyright protection in the United States per 17 U.S.C. 105.
+
+
+================================================================================
+NIST ACVP-Server ML-DSA vectors (in crypto/sign/mldsa65/testdata/acvp/)
+Source: https://github.com/usnistgov/ACVP-Server
+        commit 15c0f3deeefbfa8cb6cd32a99e1ca3b738c66bf0
+License: Public domain (U.S. Government work)
+================================================================================
+
+NIST test vectors are works of the United States Government and are not
+subject to copyright protection in the United States per 17 U.S.C. 105.

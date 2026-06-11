@@ -1191,3 +1191,90 @@ func errorsIsAny(err error, targets ...error) bool {
 	}
 	return false
 }
+
+// TestTransport_AEADTamperRejected flips bytes on real Noise transport
+// ciphertext (ChaCha20-Poly1305 through a completed XX handshake) and
+// asserts ErrDecrypt. Also verifies auth failure leaves the receive
+// state consistent: the untampered original still decrypts afterwards.
+func TestTransport_AEADTamperRejected(t *testing.T) {
+	x := dh.NewX25519()
+	suite := suiteChachaSha256()
+
+	aliceS, err := x.GenerateKeypair(clatter.NewDummyRng(11))
+	if err != nil {
+		t.Fatalf("alice keygen: %v", err)
+	}
+	bobS, err := x.GenerateKeypair(clatter.NewDummyRng(22))
+	if err != nil {
+		t.Fatalf("bob keygen: %v", err)
+	}
+
+	alice, err := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
+		clatter.WithStaticKey(aliceS))
+	if err != nil {
+		t.Fatalf("alice: %v", err)
+	}
+	bob, err := clatter.NewNqHandshake(clatter.PatternXX, false, suite,
+		clatter.WithStaticKey(bobS))
+	if err != nil {
+		t.Fatalf("bob: %v", err)
+	}
+
+	buf := make([]byte, 4096)
+	out := make([]byte, 4096)
+	for i := 0; i < 3; i++ {
+		w, r := alice, bob
+		if i%2 == 1 {
+			w, r = bob, alice
+		}
+		n, err := w.WriteMessage(nil, buf)
+		if err != nil {
+			t.Fatalf("msg %d write: %v", i, err)
+		}
+		if _, err := r.ReadMessage(buf[:n], out); err != nil {
+			t.Fatalf("msg %d read: %v", i, err)
+		}
+	}
+
+	aliceTS, err := alice.Finalize()
+	if err != nil {
+		t.Fatalf("alice finalize: %v", err)
+	}
+	defer aliceTS.Destroy()
+	bobTS, err := bob.Finalize()
+	if err != nil {
+		t.Fatalf("bob finalize: %v", err)
+	}
+	defer bobTS.Destroy()
+
+	payload := []byte("authenticated transport message")
+	n, err := aliceTS.Send(payload, buf)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	original := append([]byte{}, buf[:n]...)
+
+	// Flip one byte in the ciphertext body, middle, and the AEAD tag.
+	for _, pos := range []int{0, n / 2, n - 1} {
+		tampered := append([]byte{}, original...)
+		tampered[pos] ^= 0x01
+
+		m, err := bobTS.Receive(tampered, out)
+		if err == nil {
+			t.Fatalf("tamper at %d: Receive accepted tampered ciphertext (%d bytes plaintext)", pos, m)
+		}
+		if !errors.Is(err, clatter.ErrDecrypt) {
+			t.Fatalf("tamper at %d: got %v, want ErrDecrypt", pos, err)
+		}
+	}
+
+	// Auth failure must not corrupt receive state: the original
+	// untampered message still decrypts.
+	m, err := bobTS.Receive(original, out)
+	if err != nil {
+		t.Fatalf("receive original after tamper attempts: %v", err)
+	}
+	if string(out[:m]) != string(payload) {
+		t.Fatalf("payload mismatch after recovery: %q", out[:m])
+	}
+}
