@@ -405,14 +405,14 @@ func (hs *PqHandshake) ReadMessage(message, out []byte) (int, error) {
 		learnedRSKEM = copyBytes(hs.rs.Public)
 	}
 	hs.notifyMessage(HandshakeEvent{
-		MessageIndex:     hs.msgIndex,
-		Direction:        Received,
-		Phase:            SinglePhase,
-		HandshakeType:    TypePQ,
-		IsInitiator:      hs.initiator,
-		ProtocolName:     hs.protocolName,
-		HandshakeHash:    hs.GetHandshakeHash(),
-		PayloadLen:       payloadLen,
+		MessageIndex:       hs.msgIndex,
+		Direction:          Received,
+		Phase:              SinglePhase,
+		HandshakeType:      TypePQ,
+		IsInitiator:        hs.initiator,
+		ProtocolName:       hs.protocolName,
+		HandshakeHash:      hs.GetHandshakeHash(),
+		PayloadLen:         payloadLen,
 		RemoteEphemeralKEM: learnedREKEM,
 		RemoteStaticKEM:    learnedRSKEM,
 	})

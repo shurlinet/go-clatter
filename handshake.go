@@ -72,11 +72,11 @@ type HandshakeInternals struct {
 	re *KeyPair // remote ephemeral (public only)
 
 	// Pattern state
-	pattern     *HandshakePattern
-	initiator   bool
-	status      HandshakeStatus
-	initIdx     int // initiator message index
-	respIdx     int // responder message index
+	pattern        *HandshakePattern
+	initiator      bool
+	status         HandshakeStatus
+	initIdx        int // initiator message index
+	respIdx        int // responder message index
 	finalized      bool
 	ownRandApplied bool // tracks whether local entropy has been contributed
 	pskApplied     bool // tracks whether a PSK token has been processed

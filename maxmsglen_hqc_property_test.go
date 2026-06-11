@@ -21,15 +21,15 @@ import (
 
 // Hardcoded HQC-128 sizes for independent overhead calculation.
 const (
-	hqcEKEMPubLen    = hqc.PublicKeySize128    // 2241
-	hqcSKEMPubLen    = hqc.PublicKeySize128    // 2241
-	hqcEKEMCtLen     = hqc.CiphertextSize128   // 4433
-	hqcSKEMCtLen     = hqc.CiphertextSize128   // 4433
-	hqcHybDHPubLen   = 32                       // X25519 public key
-	hqcHybEKEMPubLen = hqc.PublicKeySize128    // 2241
-	hqcHybSKEMPubLen = hqc.PublicKeySize128    // 2241
-	hqcHybEKEMCtLen  = hqc.CiphertextSize128   // 4433
-	hqcHybSKEMCtLen  = hqc.CiphertextSize128   // 4433
+	hqcEKEMPubLen    = hqc.PublicKeySize128  // 2241
+	hqcSKEMPubLen    = hqc.PublicKeySize128  // 2241
+	hqcEKEMCtLen     = hqc.CiphertextSize128 // 4433
+	hqcSKEMCtLen     = hqc.CiphertextSize128 // 4433
+	hqcHybDHPubLen   = 32                    // X25519 public key
+	hqcHybEKEMPubLen = hqc.PublicKeySize128  // 2241
+	hqcHybSKEMPubLen = hqc.PublicKeySize128  // 2241
+	hqcHybEKEMCtLen  = hqc.CiphertextSize128 // 4433
+	hqcHybSKEMCtLen  = hqc.CiphertextSize128 // 4433
 	hqcTagLen        = 16
 )
 

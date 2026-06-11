@@ -30,9 +30,9 @@ var (
 	ErrNonceOverflow = errors.New("clatter: nonce overflow")
 
 	// KEM errors
-	ErrKEM             = errors.New("clatter: KEM operation failed")
-	ErrKEMDecapsulate  = errors.New("clatter: KEM decapsulation failed")
-	ErrKEMInvalidKey   = errors.New("clatter: KEM invalid key")
+	ErrKEM            = errors.New("clatter: KEM operation failed")
+	ErrKEMDecapsulate = errors.New("clatter: KEM decapsulation failed")
+	ErrKEMInvalidKey  = errors.New("clatter: KEM invalid key")
 
 	// Secret lifecycle errors
 	ErrDestroyed = errors.New("clatter: use of destroyed secret")

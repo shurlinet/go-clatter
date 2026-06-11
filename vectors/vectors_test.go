@@ -21,19 +21,19 @@ type vectorFile struct {
 }
 
 type vector struct {
-	ProtocolName    string    `json:"protocol_name"`
-	InitPrologue    hexBytes  `json:"init_prologue"`
-	InitEphemeral   hexBytes  `json:"init_ephemeral"`
-	InitStatic      *hexBytes `json:"init_static"`
-	InitRemoteStatic *hexBytes `json:"init_remote_static"`
-	InitPSKs        []hexBytes `json:"init_psks"`
-	RespPrologue    hexBytes  `json:"resp_prologue"`
-	RespEphemeral   *hexBytes `json:"resp_ephemeral"`
-	RespStatic      *hexBytes `json:"resp_static"`
-	RespRemoteStatic *hexBytes `json:"resp_remote_static"`
-	RespPSKs        []hexBytes `json:"resp_psks"`
-	HandshakeHash   *hexBytes `json:"handshake_hash"`
-	Messages        []message `json:"messages"`
+	ProtocolName     string     `json:"protocol_name"`
+	InitPrologue     hexBytes   `json:"init_prologue"`
+	InitEphemeral    hexBytes   `json:"init_ephemeral"`
+	InitStatic       *hexBytes  `json:"init_static"`
+	InitRemoteStatic *hexBytes  `json:"init_remote_static"`
+	InitPSKs         []hexBytes `json:"init_psks"`
+	RespPrologue     hexBytes   `json:"resp_prologue"`
+	RespEphemeral    *hexBytes  `json:"resp_ephemeral"`
+	RespStatic       *hexBytes  `json:"resp_static"`
+	RespRemoteStatic *hexBytes  `json:"resp_remote_static"`
+	RespPSKs         []hexBytes `json:"resp_psks"`
+	HandshakeHash    *hexBytes  `json:"handshake_hash"`
+	Messages         []message  `json:"messages"`
 }
 
 type message struct {
@@ -63,42 +63,42 @@ func (h *hexBytes) UnmarshalJSON(data []byte) error {
 
 // patternMap maps pattern name substrings to go-clatter pattern pointers.
 var patternMap = map[string]*clatter.HandshakePattern{
-	"N":       clatter.PatternN,
-	"K":       clatter.PatternK,
-	"X":       clatter.PatternX,
-	"NN":      clatter.PatternNN,
-	"NK":      clatter.PatternNK,
-	"NX":      clatter.PatternNX,
-	"KN":      clatter.PatternKN,
-	"KK":      clatter.PatternKK,
-	"KX":      clatter.PatternKX,
-	"XN":      clatter.PatternXN,
-	"XK":      clatter.PatternXK,
-	"XX":      clatter.PatternXX,
-	"IN":      clatter.PatternIN,
-	"IK":      clatter.PatternIK,
-	"IX":      clatter.PatternIX,
-	"NNpsk0":  clatter.PatternNNpsk0,
-	"NNpsk2":  clatter.PatternNNpsk2,
-	"NKpsk0":  clatter.PatternNKpsk0,
-	"NKpsk2":  clatter.PatternNKpsk2,
-	"NXpsk2":  clatter.PatternNXpsk2,
-	"KNpsk0":  clatter.PatternKNpsk0,
-	"KNpsk2":  clatter.PatternKNpsk2,
-	"KKpsk0":  clatter.PatternKKpsk0,
-	"KKpsk2":  clatter.PatternKKpsk2,
-	"KXpsk2":  clatter.PatternKXpsk2,
-	"XNpsk3":  clatter.PatternXNpsk3,
-	"XKpsk3":  clatter.PatternXKpsk3,
-	"XXpsk3":  clatter.PatternXXpsk3,
-	"INpsk1":  clatter.PatternINpsk1,
-	"INpsk2":  clatter.PatternINpsk2,
-	"IKpsk1":  clatter.PatternIKpsk1,
-	"IKpsk2":  clatter.PatternIKpsk2,
-	"IXpsk2":  clatter.PatternIXpsk2,
-	"Npsk0":   clatter.PatternNpsk0,
-	"Kpsk0":   clatter.PatternKpsk0,
-	"Xpsk1":   clatter.PatternXpsk1,
+	"N":      clatter.PatternN,
+	"K":      clatter.PatternK,
+	"X":      clatter.PatternX,
+	"NN":     clatter.PatternNN,
+	"NK":     clatter.PatternNK,
+	"NX":     clatter.PatternNX,
+	"KN":     clatter.PatternKN,
+	"KK":     clatter.PatternKK,
+	"KX":     clatter.PatternKX,
+	"XN":     clatter.PatternXN,
+	"XK":     clatter.PatternXK,
+	"XX":     clatter.PatternXX,
+	"IN":     clatter.PatternIN,
+	"IK":     clatter.PatternIK,
+	"IX":     clatter.PatternIX,
+	"NNpsk0": clatter.PatternNNpsk0,
+	"NNpsk2": clatter.PatternNNpsk2,
+	"NKpsk0": clatter.PatternNKpsk0,
+	"NKpsk2": clatter.PatternNKpsk2,
+	"NXpsk2": clatter.PatternNXpsk2,
+	"KNpsk0": clatter.PatternKNpsk0,
+	"KNpsk2": clatter.PatternKNpsk2,
+	"KKpsk0": clatter.PatternKKpsk0,
+	"KKpsk2": clatter.PatternKKpsk2,
+	"KXpsk2": clatter.PatternKXpsk2,
+	"XNpsk3": clatter.PatternXNpsk3,
+	"XKpsk3": clatter.PatternXKpsk3,
+	"XXpsk3": clatter.PatternXXpsk3,
+	"INpsk1": clatter.PatternINpsk1,
+	"INpsk2": clatter.PatternINpsk2,
+	"IKpsk1": clatter.PatternIKpsk1,
+	"IKpsk2": clatter.PatternIKpsk2,
+	"IXpsk2": clatter.PatternIXpsk2,
+	"Npsk0":  clatter.PatternNpsk0,
+	"Kpsk0":  clatter.PatternKpsk0,
+	"Xpsk1":  clatter.PatternXpsk1,
 }
 
 // parseProtocolName splits "Noise_{pattern}_{dh}_{cipher}_{hash}" into components.

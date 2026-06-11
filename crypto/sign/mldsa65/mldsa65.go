@@ -48,11 +48,11 @@ const (
 
 // Errors returned by this package.
 var (
-	ErrDestroyed           = errors.New("mldsa65: private key destroyed")
-	ErrInvalidSeedSize     = errors.New("mldsa65: seed must be exactly 32 bytes")
+	ErrDestroyed            = errors.New("mldsa65: private key destroyed")
+	ErrInvalidSeedSize      = errors.New("mldsa65: seed must be exactly 32 bytes")
 	ErrInvalidPublicKeySize = errors.New("mldsa65: public key must be exactly 1952 bytes")
-	ErrInvalidPublicKey    = errors.New("mldsa65: invalid public key encoding")
-	ErrContextTooLong      = errors.New("mldsa65: context must be at most 255 bytes")
+	ErrInvalidPublicKey     = errors.New("mldsa65: invalid public key encoding")
+	ErrContextTooLong       = errors.New("mldsa65: context must be at most 255 bytes")
 )
 
 // PrivateKey is an ML-DSA-65 private key with explicit lifecycle management.

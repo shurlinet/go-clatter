@@ -45,7 +45,7 @@ type testHMACWriter struct {
 }
 
 func (h *testHMACWriter) Write(p []byte) (int, error) { return h.mac.Write(p) }
-func (h *testHMACWriter) Sum() []byte                  { return h.mac.Sum(nil) }
+func (h *testHMACWriter) Sum() []byte                 { return h.mac.Sum(nil) }
 
 // helper: must succeed
 func mustHmacHash(t *testing.T, h HashFunc, key []byte, data ...[]byte) []byte {
@@ -85,8 +85,8 @@ func TestHKDF2_CounterBytesNotASCII(t *testing.T) {
 
 	// Compute what we'd get with ASCII "1" and "2" instead
 	tempKey := mustHmacHash(t, h, ck, ikm)
-	wrongOut1 := mustHmacHash(t, h, tempKey, []byte("1"))             // ASCII 0x31
-	wrongOut2 := mustHmacHash(t, h, tempKey, wrongOut1, []byte("2"))  // ASCII 0x32
+	wrongOut1 := mustHmacHash(t, h, tempKey, []byte("1"))            // ASCII 0x31
+	wrongOut2 := mustHmacHash(t, h, tempKey, wrongOut1, []byte("2")) // ASCII 0x32
 
 	if bytes.Equal(out1, wrongOut1) {
 		t.Fatal("HKDF output1 matches ASCII counter - should use raw 0x01")
@@ -226,7 +226,7 @@ func TestHKDF2_Deterministic(t *testing.T) {
 
 // HMAC key exceeding block length returns error.
 func TestHmacHash_KeyTooLong(t *testing.T) {
-	h := &testSha256{} // blockLen=64
+	h := &testSha256{}                        // blockLen=64
 	longKey := bytes.Repeat([]byte{0xff}, 65) // 1 byte over
 
 	_, err := hmacHash(h, longKey, []byte("data"))

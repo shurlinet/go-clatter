@@ -10,9 +10,9 @@ import (
 // Uses a simple XOR "cipher" that is NOT secure but verifies state machine logic.
 type testCipher struct{}
 
-func (c *testCipher) Name() string  { return "TestCipher" }
-func (c *testCipher) TagLen() int   { return TagLen }
-func (c *testCipher) KeyLen() int   { return KeyLen }
+func (c *testCipher) Name() string { return "TestCipher" }
+func (c *testCipher) TagLen() int  { return TagLen }
+func (c *testCipher) KeyLen() int  { return KeyLen }
 
 func (c *testCipher) Encrypt(key [32]byte, nonce uint64, ad, plaintext, out []byte) ([]byte, error) {
 	// Simple XOR with first key byte for testing, append 16-byte fake tag

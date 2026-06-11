@@ -14,9 +14,9 @@ import (
 // --- ACVP JSON struct definitions ---
 
 type acvpKeyGenFile struct {
-	Algorithm  string             `json:"algorithm"`
-	Mode       string             `json:"mode"`
-	TestGroups []acvpKeyGenGroup  `json:"testGroups"`
+	Algorithm  string            `json:"algorithm"`
+	Mode       string            `json:"mode"`
+	TestGroups []acvpKeyGenGroup `json:"testGroups"`
 }
 type acvpKeyGenGroup struct {
 	TgID         int              `json:"tgId"`

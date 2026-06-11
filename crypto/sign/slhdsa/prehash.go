@@ -248,4 +248,3 @@ func (k *PublicKey) VerifyPreHashWithContext(msg, sig []byte, hashFunc HashFunc,
 	mprime := makeMPrimePreHash(normalizeMsg(msg), hashFunc, ctx)
 	return internal.SLHVerifyInternal(k.params, mprime, loaded, k.internalPK)
 }
-

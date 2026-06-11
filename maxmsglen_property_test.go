@@ -16,27 +16,27 @@ import (
 // These MUST match the CipherSuite used in the test (ML-KEM-768, X25519).
 // Verified once at test start via sanity assertions.
 const (
-	nqDHPubLen      = 32   // X25519 public key
-	pqEKEMPubLen    = 1184 // ML-KEM-768 encapsulation key (Token E in PQ)
-	pqSKEMPubLen    = 1184 // ML-KEM-768 encapsulation key (Token S in PQ)
-	pqEKEMCtLen     = 1088 // ML-KEM-768 ciphertext (Token Ekem)
-	pqSKEMCtLen     = 1088 // ML-KEM-768 ciphertext (Token Skem)
-	hybridDHPubLen  = 32   // X25519 public key (Token E DH part in Hybrid)
+	nqDHPubLen       = 32   // X25519 public key
+	pqEKEMPubLen     = 1184 // ML-KEM-768 encapsulation key (Token E in PQ)
+	pqSKEMPubLen     = 1184 // ML-KEM-768 encapsulation key (Token S in PQ)
+	pqEKEMCtLen      = 1088 // ML-KEM-768 ciphertext (Token Ekem)
+	pqSKEMCtLen      = 1088 // ML-KEM-768 ciphertext (Token Skem)
+	hybridDHPubLen   = 32   // X25519 public key (Token E DH part in Hybrid)
 	hybridEKEMPubLen = 1184 // ML-KEM-768 encapsulation key (Token E KEM part in Hybrid)
 	hybridSKEMPubLen = 1184 // ML-KEM-768 encapsulation key (Token S KEM part in Hybrid)
-	hybridEKEMCtLen = 1088 // ML-KEM-768 ciphertext (Token Ekem in Hybrid)
-	hybridSKEMCtLen = 1088 // ML-KEM-768 ciphertext (Token Skem in Hybrid)
-	propTagLen      = 16   // AEAD tag length (both ChaChaPoly and AES-GCM)
+	hybridEKEMCtLen  = 1088 // ML-KEM-768 ciphertext (Token Ekem in Hybrid)
+	hybridSKEMCtLen  = 1088 // ML-KEM-768 ciphertext (Token Skem in Hybrid)
+	propTagLen       = 16   // AEAD tag length (both ChaChaPoly and AES-GCM)
 )
 
 // Hardcoded regression expectations. These values are empirically verified
 // and will never change (FIPS constants + immutable pattern definitions).
 var regressionExpectations = map[string]int{
-	"NN":        48,
-	"XX":        96,
-	"pqIK":      3488,
-	"hybridXX":  3568,
-	"hybridKX":  4672,
+	"NN":       48,
+	"XX":       96,
+	"pqIK":     3488,
+	"hybridXX": 3568,
+	"hybridKX": 4672,
 }
 
 // computeOverheadArray computes per-message wire overhead independently of

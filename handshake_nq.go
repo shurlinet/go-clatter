@@ -395,14 +395,14 @@ func (hs *NqHandshake) ReadMessage(message, out []byte) (int, error) {
 		learnedRS = copyBytes(hs.rs.Public)
 	}
 	hs.notifyMessage(HandshakeEvent{
-		MessageIndex:    hs.msgIndex,
-		Direction:       Received,
-		Phase:           SinglePhase,
-		HandshakeType:   TypeNQ,
-		IsInitiator:     hs.initiator,
-		ProtocolName:    hs.protocolName,
-		HandshakeHash:   hs.GetHandshakeHash(),
-		PayloadLen:      payloadLen,
+		MessageIndex:      hs.msgIndex,
+		Direction:         Received,
+		Phase:             SinglePhase,
+		HandshakeType:     TypeNQ,
+		IsInitiator:       hs.initiator,
+		ProtocolName:      hs.protocolName,
+		HandshakeHash:     hs.GetHandshakeHash(),
+		PayloadLen:        payloadLen,
 		RemoteEphemeralDH: learnedRE,
 		RemoteStaticDH:    learnedRS,
 	})

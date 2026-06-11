@@ -262,7 +262,7 @@ func TestObserver_PanickingObserver(t *testing.T) {
 
 type panickingObserver struct{}
 
-func (p *panickingObserver) OnMessage(_ clatter.HandshakeEvent) { panic("test panic") }
+func (p *panickingObserver) OnMessage(_ clatter.HandshakeEvent)    { panic("test panic") }
 func (p *panickingObserver) OnError(_ clatter.HandshakeErrorEvent) { panic("error panic too") }
 
 // TestObserver_EventDataAreCopies verifies mutating event data doesn't affect handshake.

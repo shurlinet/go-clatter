@@ -139,8 +139,8 @@ func TestHashNames(t *testing.T) {
 
 func TestHashBlockLen(t *testing.T) {
 	tests := []struct {
-		h   clatter.HashFunc
-		bl  int
+		h  clatter.HashFunc
+		bl int
 	}{
 		{NewSha256(), 64},
 		{NewSha512(), 128},
