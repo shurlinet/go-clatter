@@ -19,8 +19,10 @@ UPSTREAM_COMMIT="15ed0951bd833dd5699dcceddaf614826e3fcb14"
 EMBEDDED_DIR="crypto/sign/slhdsa/internal"
 UPSTREAM_SUBDIR="slh_dsa/internal"
 
-# Find repo root
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Find repo root from the script's own location, NOT the caller's cwd:
+# invoked from outside the repo, cwd-based resolution silently diffs
+# against the wrong tree (or none at all).
+REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 echo "=== Verify Embedded Code ==="
@@ -64,15 +66,32 @@ for f in "${FILES[@]}"; do
     # and the Zero() method we added to slh_dsa.go
     STRIPPED="$TMPDIR/stripped_$f"
     if [ "$f" = "slh_dsa.go" ]; then
-        # Remove header comments + Zero() method block
+        # Remove header comments + Zero() method block. The Zero() block
+        # sits mid-file with a separating blank line on each side, so the
+        # removal must also consume ONE adjacent blank line or the
+        # stripped file keeps a doubled blank where upstream has one.
         sed '/^\/\/ Originally from/,/^$/d' "$EMBEDDED_FILE" | \
-        sed '/^\/\/ Zero zeros all secret material/,/^}$/d' > "$STRIPPED"
+        awk '
+            /^\/\/ Zero zeros all secret material/ { inblock = 1 }
+            inblock && /^}$/ { inblock = 0; skipblank = 1; next }
+            inblock { next }
+            skipblank && /^$/ { skipblank = 0; next }
+            { skipblank = 0; print }
+        ' > "$STRIPPED"
     else
         # Remove header comments only (everything before "package internal")
         sed '/^\/\/ Originally from/,/^$/d' "$EMBEDDED_FILE" > "$STRIPPED"
     fi
 
-    DIFF=$(diff "$UPSTREAM_FILE" "$STRIPPED" || true)
+    # Normalize trailing blank lines on both sides before diffing: the
+    # Zero() method is appended after a separating blank line, and the
+    # block strip above leaves that blank behind, which is whitespace,
+    # not a code difference. ($(<file) drops trailing newlines.)
+    NORM_UPSTREAM="$TMPDIR/norm_upstream_$f"
+    printf '%s\n' "$(<"$UPSTREAM_FILE")" > "$NORM_UPSTREAM"
+    printf '%s\n' "$(<"$STRIPPED")" > "$STRIPPED.norm"
+
+    DIFF=$(diff "$NORM_UPSTREAM" "$STRIPPED.norm" || true)
 
     if [ -z "$DIFF" ]; then
         echo "  OK: $f (matches upstream)"
