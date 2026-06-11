@@ -9,6 +9,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	clatter "github.com/shurlinet/go-clatter"
 	"github.com/shurlinet/go-clatter/crypto/cipher"
@@ -16,6 +17,16 @@ import (
 	"github.com/shurlinet/go-clatter/crypto/hash"
 	"github.com/shurlinet/go-clatter/crypto/kem"
 )
+
+// check aborts on the first error. A failed handshake step (including a
+// failed decrypt in ReadMessage, the MITM/tamper path) means the session
+// is dead and must be abandoned - never proceed past it.
+func check(step string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", step, err)
+		os.Exit(1)
+	}
+}
 
 func main() {
 	x := dh.NewX25519()
@@ -32,16 +43,22 @@ func main() {
 	}
 
 	// Outer layer: NQ NN
-	aliceNQ, _ := clatter.NewNqHandshake(clatter.PatternNN, true, nqSuite)
-	bobNQ, _ := clatter.NewNqHandshake(clatter.PatternNN, false, nqSuite)
+	aliceNQ, err := clatter.NewNqHandshake(clatter.PatternNN, true, nqSuite)
+	check("alice NewNqHandshake", err)
+	bobNQ, err := clatter.NewNqHandshake(clatter.PatternNN, false, nqSuite)
+	check("bob NewNqHandshake", err)
 
 	// Inner layer: PQ NN
-	alicePQ, _ := clatter.NewPqHandshake(clatter.PatternPqNN, true, pqSuite)
-	bobPQ, _ := clatter.NewPqHandshake(clatter.PatternPqNN, false, pqSuite)
+	alicePQ, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, pqSuite)
+	check("alice NewPqHandshake", err)
+	bobPQ, err := clatter.NewPqHandshake(clatter.PatternPqNN, false, pqSuite)
+	check("bob NewPqHandshake", err)
 
 	// Compose into dual-layer handshake
-	alice, _ := clatter.NewDualLayerHandshake(aliceNQ, alicePQ, 4096)
-	bob, _ := clatter.NewDualLayerHandshake(bobNQ, bobPQ, 4096)
+	alice, err := clatter.NewDualLayerHandshake(aliceNQ, alicePQ, 4096)
+	check("alice NewDualLayerHandshake", err)
+	bob, err := clatter.NewDualLayerHandshake(bobNQ, bobPQ, 4096)
+	check("bob NewDualLayerHandshake", err)
 
 	// Handshake message buffers
 	buf := make([]byte, 4096)
@@ -49,39 +66,52 @@ func main() {
 
 	// OUTER LAYER - NQ NN HANDSHAKE
 	// e -->
-	n, _ := alice.WriteMessage(nil, buf)
-	_, _ = bob.ReadMessage(buf[:n], out)
+	n, err := alice.WriteMessage(nil, buf)
+	check("alice WriteMessage 1", err)
+	_, err = bob.ReadMessage(buf[:n], out)
+	check("bob ReadMessage 1", err)
 
 	// <-- e, ee
-	n, _ = bob.WriteMessage(nil, buf)
-	_, _ = alice.ReadMessage(buf[:n], out)
+	n, err = bob.WriteMessage(nil, buf)
+	check("bob WriteMessage 2", err)
+	_, err = alice.ReadMessage(buf[:n], out)
+	check("alice ReadMessage 2", err)
 
 	fmt.Printf("Outer layer complete: %v\n", alice.OuterCompleted())
 
 	// INNER LAYER - PQ NN HANDSHAKE (encrypted by outer transport)
 	// e -->
-	n, _ = alice.WriteMessage(nil, buf)
-	_, _ = bob.ReadMessage(buf[:n], out)
+	n, err = alice.WriteMessage(nil, buf)
+	check("alice WriteMessage 3", err)
+	_, err = bob.ReadMessage(buf[:n], out)
+	check("bob ReadMessage 3", err)
 
 	// <-- ekem
-	n, _ = bob.WriteMessage(nil, buf)
-	_, _ = alice.ReadMessage(buf[:n], out)
+	n, err = bob.WriteMessage(nil, buf)
+	check("bob WriteMessage 4", err)
+	_, err = alice.ReadMessage(buf[:n], out)
+	check("alice ReadMessage 4", err)
 
 	// Handshake should be done
 	if !alice.IsFinished() || !bob.IsFinished() {
-		panic("handshake not finished")
+		fmt.Fprintln(os.Stderr, "handshake not finished")
+		os.Exit(1)
 	}
 
 	// Finish handshakes and move to transport mode
-	aliceT, _ := alice.Finalize()
-	bobT, _ := bob.Finalize()
+	aliceT, err := alice.Finalize()
+	check("alice Finalize", err)
+	bobT, err := bob.Finalize()
+	check("bob Finalize", err)
 	defer aliceT.Destroy()
 	defer bobT.Destroy()
 
 	// Send a message from Alice to Bob
 	msg := []byte("Hello from initiator")
-	n, _ = aliceT.Send(msg, buf)
-	n, _ = bobT.Receive(buf[:n], out)
+	n, err = aliceT.Send(msg, buf)
+	check("alice Send", err)
+	n, err = bobT.Receive(buf[:n], out)
+	check("bob Receive", err)
 
 	fmt.Printf("Bob received from Alice: %s\n", out[:n])
 }

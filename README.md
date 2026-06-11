@@ -127,10 +127,13 @@ suite := clatter.CipherSuite{
     Hash:   hash.NewSha256(),
 }
 
-alice, _ := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
+alice, err := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
     clatter.WithStaticKey(aliceKeys),
     clatter.WithPrologue([]byte("my-app/v1")),
 )
+if err != nil {
+    panic(err)
+}
 
 // Hybrid handshake (quantum-resistant)
 hybridSuite := clatter.CipherSuite{
@@ -141,11 +144,14 @@ hybridSuite := clatter.CipherSuite{
     Hash:   hash.NewSha256(),
 }
 
-alice, _ := clatter.NewHybridHandshake(clatter.PatternHybridXX, true, hybridSuite,
+alice, err = clatter.NewHybridHandshake(clatter.PatternHybridXX, true, hybridSuite,
     clatter.WithStaticKey(aliceDHKeys),
     clatter.WithStaticKEMKey(aliceKEMKeys),
     clatter.WithPrologue([]byte("my-app/v1")),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 ### HQC (Experimental)
@@ -175,9 +181,12 @@ suite := clatter.CipherSuite{
     Experimental: true,
 }
 
-alice, _ := clatter.NewPqHandshake(clatter.PatternPqXX, true, suite,
+alice, err := clatter.NewPqHandshake(clatter.PatternPqXX, true, suite,
     clatter.WithStaticKey(aliceKeys),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 Without the build tag, HQC code is not compiled (zero binary bloat). Without `AllowExperimental`, every KEM operation returns `ErrExperimentalNotAllowed`. Both gates will be relaxed as HQC progresses through FIPS standardization.
@@ -188,22 +197,37 @@ Without the build tag, HQC code is not compiled (zero binary bloat). Without `Al
 import "github.com/shurlinet/go-clatter/crypto/sign/mldsa65"
 
 // Generate a key pair.
-sk, _ := mldsa65.GenerateKey()
+sk, err := mldsa65.GenerateKey()
+if err != nil {
+    panic(err)
+}
 defer sk.Destroy() // zeros seed on cleanup
 
 // Sign (hedged randomness - recommended for production).
-sig, _ := sk.Sign([]byte("message to sign"))
+sig, err := sk.Sign([]byte("message to sign"))
+if err != nil {
+    panic(err)
+}
 
 // Verify.
 ok := sk.PublicKey().Verify([]byte("message to sign"), sig)
 
 // Context separation prevents cross-purpose replay.
-sig, _ = sk.SignWithContext([]byte("data"), "my-app/transfers/v1")
+sig, err = sk.SignWithContext([]byte("data"), "my-app/transfers/v1")
+if err != nil {
+    panic(err)
+}
 ok = sk.PublicKey().VerifyWithContext([]byte("data"), sig, "my-app/transfers/v1")
 
 // Seed export/import for key persistence.
-seed, _ := sk.Seed()       // 32 bytes - store securely
-sk2, _ := mldsa65.NewPrivateKeyFromSeed(seed) // reconstruct later
+seed, err := sk.Seed() // 32 bytes - store securely
+if err != nil {
+    panic(err)
+}
+sk2, err := mldsa65.NewPrivateKeyFromSeed(seed) // reconstruct later
+if err != nil {
+    panic(err)
+}
 defer sk2.Destroy()
 ```
 
@@ -213,25 +237,40 @@ defer sk2.Destroy()
 import "github.com/shurlinet/go-clatter/crypto/sign/slhdsa"
 
 // Generate a key pair (SHA2-128f: fastest FIPS 205 param set).
-priv, _ := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+if err != nil {
+    panic(err)
+}
 defer priv.Destroy()
 
 // Sign (hedged randomness - recommended for production).
-sig, _ := priv.SignMessage([]byte("message"))
+sig, err := priv.SignMessage([]byte("message"))
+if err != nil {
+    panic(err)
+}
 
 // Verify.
 ok := priv.PublicKey().Verify([]byte("message"), sig)
 
 // BLAKE3 variant (non-FIPS, faster on x86 with SIMD).
 // Same API, just a different ParamSet constant.
-privB, _ := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
+privB, err := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
+if err != nil {
+    panic(err)
+}
 defer privB.Destroy()
-sigB, _ := privB.SignMessage([]byte("blake3 message"))
-_ = privB.PublicKey().Verify([]byte("blake3 message"), sigB)
+sigB, err := privB.SignMessage([]byte("blake3 message"))
+if err != nil {
+    panic(err)
+}
+ok = privB.PublicKey().Verify([]byte("blake3 message"), sigB)
 
 // Pre-hash mode for large files (SHA2/SHAKE param sets only).
 largeFile := []byte("contents of a large file")
-sig, _ = priv.SignPreHash(largeFile, slhdsa.HashSHA2_256)
+sig, err = priv.SignPreHash(largeFile, slhdsa.HashSHA2_256)
+if err != nil {
+    panic(err)
+}
 ok = priv.PublicKey().VerifyPreHash(largeFile, sig, slhdsa.HashSHA2_256)
 ```
 
@@ -252,10 +291,13 @@ func (o *myObserver) OnError(e clatter.HandshakeErrorEvent) {
     fmt.Printf("[msg %d] ERROR: %v\n", e.MessageIndex, e.Err)
 }
 
-alice, _ := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
+alice, err := clatter.NewNqHandshake(clatter.PatternXX, true, suite,
     clatter.WithStaticKey(aliceKeys),
     clatter.WithObserver(&myObserver{}),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 Observer events report learned remote keys (DH and KEM), handshake hash, protocol name, phase (for dual-layer), and completion status. A nil observer has zero overhead. Panics in observer callbacks are recovered. See [`examples/observer/`](examples/observer/) and the [Observer godoc](https://pkg.go.dev/github.com/shurlinet/go-clatter#Observer).

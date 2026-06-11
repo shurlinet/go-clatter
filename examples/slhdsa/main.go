@@ -41,15 +41,27 @@ func main() {
 	fmt.Printf("Verify: %v\n", ok)
 
 	// Context separation: domain-separate signatures for different purposes.
-	sigAuth, _ := priv.SignWithContext(msg, "auth/v1")
+	sigAuth, err := priv.SignWithContext(msg, "auth/v1")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "SignWithContext: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("Verify with correct context: %v\n",
 		pub.VerifyWithContext(msg, sigAuth, "auth/v1"))
 	fmt.Printf("Verify with wrong context: %v\n",
 		pub.VerifyWithContext(msg, sigAuth, "wrong/ctx"))
 
 	// Key serialization round-trip.
-	skBytes, _ := priv.Bytes()
-	priv2, _ := slhdsa.NewPrivateKeyFromBytes(slhdsa.SHA2_128f, skBytes)
+	skBytes, err := priv.Bytes()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Bytes: %v\n", err)
+		os.Exit(1)
+	}
+	priv2, err := slhdsa.NewPrivateKeyFromBytes(slhdsa.SHA2_128f, skBytes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "NewPrivateKeyFromBytes: %v\n", err)
+		os.Exit(1)
+	}
 	defer priv2.Destroy()
 	fmt.Printf("Keys equal: %v\n", priv.Equal(priv2))
 

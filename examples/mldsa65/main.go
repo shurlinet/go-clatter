@@ -40,20 +40,37 @@ func main() {
 	fmt.Printf("Verify: %v\n", ok)
 
 	// Context separation: signatures for different purposes cannot cross-verify.
-	sigAuth, _ := sk.SignWithContext(msg, "auth/v1")
-	sigPayment, _ := sk.SignWithContext(msg, "payment/v1")
+	sigAuth, err := sk.SignWithContext(msg, "auth/v1")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "SignWithContext auth: %v\n", err)
+		os.Exit(1)
+	}
+	sigPayment, err := sk.SignWithContext(msg, "payment/v1")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "SignWithContext payment: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("auth sig verifies with auth ctx: %v\n",
 		sk.PublicKey().VerifyWithContext(msg, sigAuth, "auth/v1"))
 	fmt.Printf("auth sig verifies with payment ctx: %v\n",
 		sk.PublicKey().VerifyWithContext(msg, sigAuth, "payment/v1"))
-	_ = sigPayment
+	fmt.Printf("payment sig verifies with payment ctx: %v\n",
+		sk.PublicKey().VerifyWithContext(msg, sigPayment, "payment/v1"))
 
 	// Seed round-trip: export seed, reconstruct key later.
-	seed, _ := sk.Seed()
+	seed, err := sk.Seed()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Seed: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("Seed (hex): %s\n", hex.EncodeToString(seed))
 
-	sk2, _ := mldsa65.NewPrivateKeyFromSeed(seed)
+	sk2, err := mldsa65.NewPrivateKeyFromSeed(seed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "NewPrivateKeyFromSeed: %v\n", err)
+		os.Exit(1)
+	}
 	defer sk2.Destroy()
 	fmt.Printf("Reconstructed key equal: %v\n", sk.Equal(sk2))
 

@@ -6,12 +6,23 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	clatter "github.com/shurlinet/go-clatter"
 	"github.com/shurlinet/go-clatter/crypto/cipher"
 	"github.com/shurlinet/go-clatter/crypto/hash"
 	"github.com/shurlinet/go-clatter/crypto/kem"
 )
+
+// check aborts on the first error. A failed handshake step (including a
+// failed decrypt in ReadMessage, the MITM/tamper path) means the session
+// is dead and must be abandoned - never proceed past it.
+func check(step string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", step, err)
+		os.Exit(1)
+	}
+}
 
 func main() {
 	suite := clatter.CipherSuite{
@@ -21,8 +32,10 @@ func main() {
 		Hash:   hash.NewSha512(),
 	}
 
-	alice, _ := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite)
-	bob, _ := clatter.NewPqHandshake(clatter.PatternPqNN, false, suite)
+	alice, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite)
+	check("alice NewPqHandshake", err)
+	bob, err := clatter.NewPqHandshake(clatter.PatternPqNN, false, suite)
+	check("bob NewPqHandshake", err)
 
 	// Handshake message buffers
 	buf := make([]byte, 4096)
@@ -30,29 +43,38 @@ func main() {
 
 	// First handshake message from initiator to responder
 	// e -->
-	n, _ := alice.WriteMessage(nil, buf)
-	_, _ = bob.ReadMessage(buf[:n], out)
+	n, err := alice.WriteMessage(nil, buf)
+	check("alice WriteMessage 1", err)
+	_, err = bob.ReadMessage(buf[:n], out)
+	check("bob ReadMessage 1", err)
 
 	// Second handshake message from responder to initiator
 	// <-- ekem
-	n, _ = bob.WriteMessage(nil, buf)
-	_, _ = alice.ReadMessage(buf[:n], out)
+	n, err = bob.WriteMessage(nil, buf)
+	check("bob WriteMessage 2", err)
+	_, err = alice.ReadMessage(buf[:n], out)
+	check("alice ReadMessage 2", err)
 
 	// Handshake should be done
 	if !alice.IsFinished() || !bob.IsFinished() {
-		panic("handshake not finished")
+		fmt.Fprintln(os.Stderr, "handshake not finished")
+		os.Exit(1)
 	}
 
 	// Finish handshakes and move to transport mode
-	aliceT, _ := alice.Finalize()
-	bobT, _ := bob.Finalize()
+	aliceT, err := alice.Finalize()
+	check("alice Finalize", err)
+	bobT, err := bob.Finalize()
+	check("bob Finalize", err)
 	defer aliceT.Destroy()
 	defer bobT.Destroy()
 
 	// Send a message from Alice to Bob
 	msg := []byte("Hello from initiator")
-	n, _ = aliceT.Send(msg, buf)
-	n, _ = bobT.Receive(buf[:n], out)
+	n, err = aliceT.Send(msg, buf)
+	check("alice Send", err)
+	n, err = bobT.Receive(buf[:n], out)
+	check("bob Receive", err)
 
 	fmt.Printf("Bob received from Alice: %s\n", out[:n])
 }
