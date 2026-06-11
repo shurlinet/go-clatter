@@ -103,6 +103,13 @@ func newDualLayerGeneric(outer, inner Handshaker, bufSize int, opts ...Option) (
 }
 
 // getInitiator extracts the initiator flag from any Handshaker.
+//
+// For unknown (external) Handshaker implementations the role is inferred
+// from IsWriteTurn, which is only correct for a FRESH handshake (the
+// initiator starts in the Send state; after the first message the write
+// turn alternates and no longer encodes the role). Dual-layer handshakes
+// must therefore be composed before any messages are exchanged - which
+// is also the only sequence the protocol supports.
 func getInitiator(h Handshaker) bool {
 	switch hs := h.(type) {
 	case *NqHandshake:
