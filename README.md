@@ -336,6 +336,8 @@ Observer events report learned remote keys (DH and KEM), handshake hash, protoco
 | Signing modules | ML-DSA-65 (FIPS 204) + SLH-DSA (FIPS 205) | Not in scope |
 | Observer callbacks | Supported | Not in scope |
 | Max message size | Configurable per-handshake | Fixed |
+| pqKN / pqNK naming | Distinct patterns, per the PQNoise paper (Figure 2) | `noise_pqkn()` mislabels its pattern "pqNK", shipping two patterns under one name |
+| Low-order X25519 input | Rejected with `ErrDHLowOrder` (Noise spec section 4.1 option 2) | Continues with all-zero shared secret (option 1; both are spec-compliant, divergence only on adversarial input) |
 
 ## Verification
 
@@ -349,8 +351,9 @@ go-clatter is verified by:
 * [Fuzz tests](fuzz_test.go) - 9 Noise fuzz targets matching Rust Clatter + 1 [HQC fuzz](smoke_hqc_test.go) (build tag `hqc`) + 2 SLH-DSA fuzz targets (sign-verify round-trip + loader crash resistance)
 * [MaxMsgLen fuzz](maxmsglen_fuzz_test.go) - Boundary sharpness verification across 3 patterns (NQ, PQ, Hybrid) covering all message count shapes
 * [Cacophony](https://github.com/haskell-cryptography/cacophony) and [Snow](https://github.com/mcginty/snow) test vectors - 408 cross-implementation vectors verified byte-for-byte ([vectors/](vectors/))
-* 10 Rust interop vectors generated from Rust Clatter with deterministic RNG
+* 10 Rust interop vectors generated from Rust Clatter with deterministic RNG, all verified byte-for-byte including the DualLayer and HybridDualLayer composites (wire bytes, per-message handshake hashes, and transport ciphertexts)
 * [NIST ACVP vectors](crypto/sign/slhdsa/testdata/acvp/) - 1,260 SLH-DSA test vectors (keygen + sigGen + sigVer) across all 12 FIPS 205 parameter sets including pre-hash mode
+* [NIST ACVP ML-DSA vectors](crypto/sign/mldsa65/testdata/acvp/) - ML-DSA-65 keyGen verified seed-to-public-key byte-for-byte plus sigVer including all NIST negative cases (modified message, commitment, z, hint)
 * [PQC Suite B BLAKE3 vectors](crypto/sign/slhdsa/testdata/blake3/) - 192 cross-implementation vectors for all 6 BLAKE3 parameter sets
 
 ```
