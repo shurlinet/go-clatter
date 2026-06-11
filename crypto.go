@@ -15,7 +15,10 @@ type DH interface {
 	// GenerateKeypair generates a new keypair using the given RNG.
 	GenerateKeypair(rng RNG) (KeyPair, error)
 	// DH performs DH between our secret and their public key.
-	// Returns the shared secret. Returns zeros on low-order input.
+	// Returns the shared secret. Rejects low-order public keys with
+	// ErrDHLowOrder: the Noise spec (section 4.1) permits either
+	// returning output that is purely a function of the public key or
+	// signaling an error; go-clatter signals an error.
 	DH(kp KeyPair, pubkey []byte) ([]byte, error)
 	// PubKeyLen returns the public key length in bytes.
 	PubKeyLen() int

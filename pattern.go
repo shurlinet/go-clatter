@@ -76,7 +76,7 @@ type HandshakePattern struct {
 	patternType PatternType // auto-detected from tokens
 	hasPSK      bool        // cached from token scan
 
-	isOneWay    bool        // One-way patterns: N, K, X (initiator only sends)
+	isOneWay bool // One-way patterns: N, K, X (initiator only sends)
 }
 
 // patternMessage holds tokens for a single handshake message.
@@ -447,7 +447,6 @@ var (
 		nil, nil, false)
 )
 
-
 // ============================================================================
 // NQ PSK Patterns
 // ============================================================================
@@ -586,31 +585,13 @@ var (
 		[][]Token{{TokenEkem, TokenS}},
 		nil, nil, false)
 
-	// pqKN: -> s, ..., -> skem, e, <- ekem  (note: Clatter labels this pqNK but maps to KN)
-	// Actually from Clatter: pqKN -> s, ..., -> e, <- ekem, skem
-	// Wait, let me re-read. Clatter noise_pqkn is NOT in the snippet. Let me use pqNK's code
-	// which Clatter confusingly names noise_pqkn. Let me just use the exact Clatter definitions.
-	// Clatter noise_pqkn: pre_init=[s], init=[(skem, e)], resp=[(ekem)]
-	// BUT wait, looking at the code: noise_pqkn is actually at line 398:
-	// -> s, ..., -> skem, e, <- ekem
-	// That IS noise_pqnk in the Clatter source. The function name/pattern name mismatch.
-	// Let me use the PATTERN NAME from Clatter which is the string passed to HandshakePattern::new.
-	// From the Clatter source, the function noise_pqkn creates pattern named "pqNK" with pre_init=[s].
-	// That's actually the KN variant (initiator has pre-shared static).
-	// CORRECTION: re-reading: noise_pqkn is at the position for pqNK.
-	// Function noise_pqkn creates "pqNK" with pre_init = [Token::S], pre_resp = [].
-	// This means initiator pre-shares S, matching KN semantics.
-	// The Clatter function NAME is wrong but the pattern NAME "pqNK" is what matters.
-	// Wait no - reading again: "pqNK" has pre_resp=[Token::S] in normal Noise (NK = responder known).
-	// Let me just trust the Rust source directly.
-	//
-	// Re-reading the source carefully:
-	// noise_pqnk: name="pqNK", pre_init=[], pre_resp=[s], init=[(skem,e)], resp=[(ekem)]
-	//   -> This is NK: responder's static is pre-known. Matches.
-	// noise_pqkn: appears to not exist separately. Let me look at what's labeled pqKN.
-	// Actually at line 430, there's no pqKN visible. Let me search.
-
 	// pqKN: -> s, ..., -> e, <- ekem, skem
+	//
+	// Token order verified against the PQNoise paper (eprint 2022/539,
+	// Figure 2). Deliberate naming deviation from Rust Clatter: Rust's
+	// noise_pqkn() builds these same tokens but mislabels the pattern
+	// "pqNK", shipping two distinct patterns under one name. go-clatter
+	// follows the paper and keeps pqKN and pqNK separate.
 	PatternPqKN = mustNewPattern("pqKN",
 		[][]Token{{TokenE}},
 		[][]Token{{TokenEkem, TokenSkem}},

@@ -42,7 +42,10 @@ func (x *X25519) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 	return clatter.NewKeyPair(privKey.PublicKey().Bytes(), privKey.Bytes()), nil
 }
 
-// DH performs X25519 DH. Returns zeros on low-order point.
+// DH performs X25519 DH. Rejects low-order peer public keys with
+// ErrDHLowOrder. The Noise spec (section 4.1) permits either returning
+// output that is purely a function of the public key or signaling an
+// error; go-clatter signals an error, which is the safer legal choice.
 func (x *X25519) DH(kp clatter.KeyPair, pubkey []byte) ([]byte, error) {
 	privKey, err := ecdh.X25519().NewPrivateKey(kp.SecretSlice())
 	if err != nil {
@@ -51,24 +54,14 @@ func (x *X25519) DH(kp clatter.KeyPair, pubkey []byte) ([]byte, error) {
 
 	remotePub, err := ecdh.X25519().NewPublicKey(pubkey)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", clatter.ErrDHLowOrder, err)
+		return nil, fmt.Errorf("%w: %v", clatter.ErrDH, err)
 	}
 
 	shared, err := privKey.ECDH(remotePub)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", clatter.ErrDH, err)
-	}
-
-	// Check for all-zero output (low-order point)
-	allZero := true
-	for _, b := range shared {
-		if b != 0 {
-			allZero = false
-			break
-		}
-	}
-	if allZero {
-		return nil, clatter.ErrDHLowOrder
+		// For X25519, crypto/ecdh's only ECDH failure is the all-zero
+		// shared secret produced by a low-order peer public key.
+		return nil, fmt.Errorf("%w: %v", clatter.ErrDHLowOrder, err)
 	}
 
 	return shared, nil
