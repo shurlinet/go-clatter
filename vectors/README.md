@@ -8,7 +8,7 @@ Cross-implementation verification vectors for go-clatter.
 
 - **snow.txt** (10,347 lines) - From the Rust [Snow](https://github.com/mcginty/snow) project. 408 vectors with a different set of key/prologue values.
 
-- **Rust interop vectors** (10 .txt files) - Generated from Rust Clatter v2.2.0 with DummyRng(0xdeadbeef). Cover NQ, PQ, Hybrid, DualLayer, and HybridDualLayer handshakes. Byte-for-byte match between Go and Rust implementations.
+- **Rust interop vectors** (10 .txt files) - Generated from Rust Clatter v2.2.0 with DummyRng(0xdeadbeef). Cover NQ, PQ, Hybrid, DualLayer, and HybridDualLayer handshakes. Byte-for-byte match between Go and Rust implementations. The dual-layer vectors use one shared RNG counter for both sides and layers, and different prologues per layer ("Spinning round and round" outer, "Stumbling all around" inner), following Rust Clatter's smoke test conventions.
 
 ## What Gets Verified
 

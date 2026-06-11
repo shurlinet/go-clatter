@@ -331,16 +331,30 @@ func TestDualVsHybridDual_DifferentHashes(t *testing.T) {
 // Interop vector tests (DualLayer + HybridDualLayer)
 // -----------------------------------------------------------------------
 
-// Interop vector tests require matching the exact Rust global-counter RNG
-// key generation order (NQ static keys -> KEM static keys -> handshake ops,
-// all sharing one atomic counter). This complex setup is deferred to the
-// FFI bridge (Phase 3) where Go can call Rust directly as a reference oracle.
+// Reconstructed from the Rust Clatter generator conventions (2026-06-11).
+// The original skip claimed this needed an FFI bridge; it actually needed
+// the generator's exact harness setup, recovered as follows:
+//   - ONE shared DummyRng(0xdeadbeef) counter for both sides and both
+//     layers (Rust uses a single global counter), drawing in this order:
+//     NQ initiator static -> NQ responder static -> KEM initiator static
+//     -> KEM responder static -> handshake operations in message order.
+//     Empirically confirmed: the first ephemeral matches only after
+//     exactly 32+32+64+64 = 192 prefix bytes.
+//   - Per Rust Clatter's smoke test convention (tests/src/smoke.rs
+//     dual_layer_handshakes), the layers get DIFFERENT prologues: outer
+//     "Spinning round and round", inner "Stumbling all around".
+//     Verified: H(H(pqXX protocol name) || "Stumbling all around")
+//     equals the vectors' recorded h[0] exactly.
+//
+// Rust dual_layer.rs mixes nothing else into the inner hash at
+// construction (verified against source), so go-clatter's composition is
+// a faithful port and these vectors exercise it byte-for-byte.
 func TestDualLayerHandshake_VectorNN_pqXX(t *testing.T) {
-	t.Skip("interop vectors deferred to FFI bridge (Phase 3)")
+	runDualLayerVectorTest(t, "vectors/dual_nn_pqxx_chacha_sha256.txt", false)
 }
 
 func TestHybridDualLayerHandshake_VectorNN_pqXX(t *testing.T) {
-	t.Skip("interop vectors deferred to FFI bridge (Phase 3)")
+	runDualLayerVectorTest(t, "vectors/hybriddual_nn_pqxx_chacha_sha256.txt", true)
 }
 
 func runDualLayerVectorTest(t *testing.T, path string, hybrid bool) {
@@ -440,34 +454,90 @@ func runDualLayerVectorTest(t *testing.T, path string, hybrid bool) {
 		Cipher: cipher.NewChaChaPoly(),
 		Hash:   hash.NewSha256(),
 	}
+	// Testing KEM variant: production Encapsulate uses crypto/rand
+	// internally; only the Testing variant draws encapsulation entropy
+	// from the injected RNG, which vector replay requires.
 	pqSuite := clatter.CipherSuite{
 		Cipher: cipher.NewChaChaPoly(),
 		Hash:   hash.NewSha256(),
-		EKEM:   kem.NewMlKem768(),
-		SKEM:   kem.NewMlKem768(),
+		EKEM:   kem.NewMlKem768Testing(),
+		SKEM:   kem.NewMlKem768Testing(),
 	}
 
-	iRng := clatter.NewDummyRng(0xdeadbeef)
-	rRng := clatter.NewDummyRng(0xdeadbeef + 1)
+	// The Rust vector generator uses ONE global DummyRng counter shared by
+	// both sides and both layers, drawing in this order: NQ initiator
+	// static -> NQ responder static -> KEM initiator static -> KEM
+	// responder static -> handshake operations in message order. The NQ
+	// statics are generated even though NN never uses them (the generator
+	// always consumes those bytes); the KEM statics are pqXX's static keys.
+	// Empirically verified: this order reproduces the vector files
+	// byte-for-byte (first ephemeral matches only after exactly
+	// 32+32+64+64 = 192 prefix bytes).
+	sharedRng := clatter.NewDummyRng(0xdeadbeef)
 
-	outerI, _ := clatter.NewNqHandshake(clatter.PatternNN, true, nqSuite,
-		clatter.WithPrologue(prologue), clatter.WithRNG(iRng))
-	outerR, _ := clatter.NewNqHandshake(clatter.PatternNN, false, nqSuite,
-		clatter.WithPrologue(prologue), clatter.WithRNG(rRng))
-	innerI, _ := clatter.NewPqHandshake(clatter.PatternPqXX, true, pqSuite,
-		clatter.WithRNG(iRng))
-	innerR, _ := clatter.NewPqHandshake(clatter.PatternPqXX, false, pqSuite,
-		clatter.WithRNG(rRng))
+	if _, err := nqSuite.DH.GenerateKeypair(sharedRng); err != nil {
+		t.Fatalf("gen NQ initiator static: %v", err)
+	}
+	if _, err := nqSuite.DH.GenerateKeypair(sharedRng); err != nil {
+		t.Fatalf("gen NQ responder static: %v", err)
+	}
+	kemI, err := pqSuite.SKEM.GenerateKeypair(sharedRng)
+	if err != nil {
+		t.Fatalf("gen KEM initiator static: %v", err)
+	}
+	kemR, err := pqSuite.SKEM.GenerateKeypair(sharedRng)
+	if err != nil {
+		t.Fatalf("gen KEM responder static: %v", err)
+	}
+
+	outerI, err := clatter.NewNqHandshake(clatter.PatternNN, true, nqSuite,
+		clatter.WithPrologue(prologue), clatter.WithRNG(sharedRng))
+	if err != nil {
+		t.Fatalf("outer initiator: %v", err)
+	}
+	outerR, err := clatter.NewNqHandshake(clatter.PatternNN, false, nqSuite,
+		clatter.WithPrologue(prologue), clatter.WithRNG(sharedRng))
+	if err != nil {
+		t.Fatalf("outer responder: %v", err)
+	}
+	// Inner prologue differs from the outer one per the Rust generator
+	// convention (tests/src/smoke.rs dual_layer_handshakes).
+	innerPrologue := []byte("Stumbling all around")
+
+	innerI, err := clatter.NewPqHandshake(clatter.PatternPqXX, true, pqSuite,
+		clatter.WithPrologue(innerPrologue), clatter.WithRNG(sharedRng),
+		clatter.WithStaticKey(kemI))
+	if err != nil {
+		t.Fatalf("inner initiator: %v", err)
+	}
+	innerR, err := clatter.NewPqHandshake(clatter.PatternPqXX, false, pqSuite,
+		clatter.WithPrologue(innerPrologue), clatter.WithRNG(sharedRng),
+		clatter.WithStaticKey(kemR))
+	if err != nil {
+		t.Fatalf("inner responder: %v", err)
+	}
 
 	var alice, bob clatter.Handshaker
 	if hybrid {
-		a, _ := clatter.NewHybridDualLayerHandshake(outerI, innerI, 8192)
-		b, _ := clatter.NewHybridDualLayerHandshake(outerR, innerR, 8192)
+		a, err := clatter.NewHybridDualLayerHandshake(outerI, innerI, 8192)
+		if err != nil {
+			t.Fatalf("hybrid dual alice: %v", err)
+		}
+		b, err := clatter.NewHybridDualLayerHandshake(outerR, innerR, 8192)
+		if err != nil {
+			t.Fatalf("hybrid dual bob: %v", err)
+		}
 		alice = a
 		bob = b
 	} else {
-		a, _ := clatter.NewDualLayerHandshake(outerI, innerI, 8192)
-		b, _ := clatter.NewDualLayerHandshake(outerR, innerR, 8192)
+		a, err := clatter.NewDualLayerHandshake(outerI, innerI, 8192)
+		if err != nil {
+			t.Fatalf("dual alice: %v", err)
+		}
+		b, err := clatter.NewDualLayerHandshake(outerR, innerR, 8192)
+		if err != nil {
+			t.Fatalf("dual bob: %v", err)
+		}
 		alice = a
 		bob = b
 	}
@@ -558,14 +628,15 @@ func runDualLayerVectorTest(t *testing.T, path string, hybrid bool) {
 		// Determine payload from expected ciphertext: payload = len(ct) - TagLen
 		payloadLen := len(tm.data) - clatter.TagLen
 		payload := make([]byte, payloadLen)
-		// Use known payloads from Rust test vectors
+		// Generator payloads, recovered by decrypting the vector transport
+		// ciphertexts with the replayed session keys (2026-06-11).
 		switch idx {
 		case 0:
 			copy(payload, []byte("Scream without a sound"))
 		case 1:
-			copy(payload, []byte("A little piece of heaven"))
+			copy(payload, []byte("Flying off the handle"))
 		case 2:
-			copy(payload, []byte("So far away, so far away"))
+			copy(payload, []byte("Eugene gene the dance machine"))
 		}
 
 		n, serr := sender.Send(payload[:payloadLen], sendBuf)
