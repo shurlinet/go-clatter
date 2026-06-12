@@ -283,6 +283,54 @@ func TestSEECPRF_OracleCrossCheck(t *testing.T) {
 	}
 }
 
+// TestSEECPRF_PinnedRegressionVectors pins the COMPLETE construction -
+// label bytes, Extract shape, re-key, info layout - against hardcoded
+// expected output generated through an independent path (x/crypto/hkdf
+// with the label as a string literal). Deliberately does NOT reference
+// seecPRFLabel or any library constant: the oracle cross-check tests
+// build the label from the const, so a mutated label would survive them
+// (the oracle follows the mutation); these vectors do not.
+func TestSEECPRF_PinnedRegressionVectors(t *testing.T) {
+	secret := testSecret() // 0x01..0x20
+	r := bytes.Repeat([]byte{0xA0}, 32)
+
+	vectors := []struct {
+		name   string
+		hf     HashFunc
+		n      int
+		expect string
+	}{
+		{"SHA256/32", &testSha256{}, 32, "4b585ecddafb05992a2a5acb91c665e5b37becdfd6b586a09e09e8bf14f2342e"},
+		{"SHA256/64", &testSha256{}, 64, "64cb61c93a4b6302cd0db244e1d8832b19f2a2a19544b0b8363d88704c2ff1f460c6529aca88886abf29876ef4ba1946ac13067569f8b8a42ffe314b7623bf64"},
+		{"SHA512/32", &testSha512{}, 32, "83537beec0995ed1e782271dec7ee557f3260d9cea20914b7142a8d44e272646"},
+		{"SHA512/64", &testSha512{}, 64, "1b9c501f2a7b918db1230617e0b3d208688ace7ae1e9fb3f332503b2115ff4f71497f68613b94068c3d7f2f76c9b8eb5ae4c454d1334c16741c9e156f46b58ae"},
+		{"BLAKE2s/32", &testBlake2s{}, 32, "ed3e0a02dc6ae6aff727539263f55e138769bf8ecdaaf359b2f1b58130317856"},
+		{"BLAKE2s/64", &testBlake2s{}, 64, "e01fb4b24a7e986c40012cece7047febd3b5a184e1e2619580eed3c58c4daaf38210e026832740df4662d62d10f9acd6a304ad66e00d51af350b5ab0ddc41934"},
+		{"BLAKE2b/32", &testBlake2b{}, 32, "011f4ffa543382620927b684578be116ad0be5dee4b2d6ce2efa8b59201bd658"},
+		{"BLAKE2b/64", &testBlake2b{}, 64, "88b6eb6b961c4c2371f344f40ef2468d8063264b73a6bd28da99fa10d706cbe19b9e2fe71019fbcf47caa9d3d61afac0f04af9cb3585ffb753169fe167833cba"},
+	}
+
+	for _, v := range vectors {
+		t.Run(v.name, func(t *testing.T) {
+			s, err := NewSEECPRF(v.hf, secret)
+			if err != nil {
+				t.Fatalf("NewSEECPRF: %v", err)
+			}
+			got, err := s.GenRand(bytes.NewReader(r), SEECKeygen, v.n)
+			if err != nil {
+				t.Fatalf("GenRand: %v", err)
+			}
+			want, err := hex.DecodeString(v.expect)
+			if err != nil {
+				t.Fatalf("bad vector hex: %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("pinned vector mismatch:\n got  %x\n want %s", got, v.expect)
+			}
+		})
+	}
+}
+
 // --- SEEC-29 corrected property set ---
 
 func TestSEECPRF_DeterministicInSecretAndR(t *testing.T) {
@@ -506,6 +554,26 @@ func TestSEECPRF_DestroyIdempotent(t *testing.T) {
 	s.Destroy() // must not panic
 	if _, err := s.GenRand(NewDummyRng(1), SEECKeygen, 32); !errors.Is(err, ErrDestroyed) {
 		t.Fatalf("still destroyed after double Destroy, got: %v", err)
+	}
+}
+
+func TestSEECPRF_DestroyZeroesPRK(t *testing.T) {
+	// Pins the zeroing itself, not just the latch: a Destroy that only
+	// sets the flag would pass every other test while leaving the PRF
+	// key in memory (same-package access to the unexported field).
+	s := mustSEECPRF(t, &testSha256{})
+	if len(s.prk) == 0 {
+		t.Fatal("precondition: prk must be populated before Destroy")
+	}
+	prk := s.prk // alias the backing array before Destroy drops the reference
+	s.Destroy()
+	if s.prk != nil {
+		t.Fatal("Destroy must drop the prk reference")
+	}
+	for i, b := range prk {
+		if b != 0 {
+			t.Fatalf("Destroy left non-zero prk byte at index %d", i)
+		}
 	}
 }
 
