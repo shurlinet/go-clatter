@@ -933,3 +933,54 @@ func truncHex(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "..."
 }
+
+// TestPqHandshake_IK_AesSha512_RoundTrip exercises the AES-GCM + SHA-512
+// suite variant end-to-end (the NQ family has the same variant test;
+// pqSuiteAesSha512 existed for this since Batch 4 but was never wired).
+func TestPqHandshake_IK_AesSha512_RoundTrip(t *testing.T) {
+	suite := pqSuiteAesSha512()
+	buf := make([]byte, 65535)
+	payloadBuf := make([]byte, 65535)
+
+	iKP, _ := suite.SKEM.GenerateKeypair(clatter.NewDummyRng(0x55555555))
+	rKP, _ := suite.SKEM.GenerateKeypair(clatter.NewDummyRng(0x66666666))
+
+	i, err := clatter.NewPqHandshake(clatter.PatternPqIK, true, suite,
+		clatter.WithStaticKey(iKP),
+		clatter.WithRemoteStatic(rKP.Public))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	defer i.Destroy()
+
+	r, err := clatter.NewPqHandshake(clatter.PatternPqIK, false, suite,
+		clatter.WithStaticKey(rKP))
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+	defer r.Destroy()
+
+	n, err := i.WriteMessage(nil, buf)
+	if err != nil {
+		t.Fatalf("msg0 write: %v", err)
+	}
+	if _, err = r.ReadMessage(buf[:n], payloadBuf); err != nil {
+		t.Fatalf("msg0 read: %v", err)
+	}
+
+	n, err = r.WriteMessage(nil, buf)
+	if err != nil {
+		t.Fatalf("msg1 write: %v", err)
+	}
+	if _, err = i.ReadMessage(buf[:n], payloadBuf); err != nil {
+		t.Fatalf("msg1 read: %v", err)
+	}
+
+	if !i.IsFinished() || !r.IsFinished() {
+		t.Fatal("both should be finished")
+	}
+
+	tsI, _ := i.Finalize()
+	tsR, _ := r.Finalize()
+	verifyTransport(t, tsI, tsR)
+}

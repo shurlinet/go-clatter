@@ -777,3 +777,81 @@ func TestHybridHandshake_DestroyZerosState(t *testing.T) {
 		t.Fatal("should not be finished after Destroy")
 	}
 }
+
+// TestHybridHandshake_IK_AesSha512_RoundTrip exercises the AES-GCM +
+// SHA-512 suite variant end-to-end (the NQ family has the same variant
+// test; hybridSuiteAesSha512 existed for this since Batch 4 but was
+// never wired).
+func TestHybridHandshake_IK_AesSha512_RoundTrip(t *testing.T) {
+	suite := hybridSuiteAesSha512()
+	buf := make([]byte, 65535)
+	payloadBuf := make([]byte, 65535)
+
+	iDH, _ := suite.DH.GenerateKeypair(crand.Reader)
+	rDH, _ := suite.DH.GenerateKeypair(crand.Reader)
+	iKEM, _ := suite.SKEM.GenerateKeypair(crand.Reader)
+	rKEM, _ := suite.SKEM.GenerateKeypair(crand.Reader)
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridIK, true, suite,
+		clatter.WithStaticKey(iDH),
+		clatter.WithRemoteStatic(rDH.Public),
+		clatter.WithStaticKEMKey(iKEM),
+		clatter.WithRemoteStaticKEMKey(rKEM.Public))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	defer i.Destroy()
+
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridIK, false, suite,
+		clatter.WithStaticKey(rDH),
+		clatter.WithStaticKEMKey(rKEM))
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+	defer r.Destroy()
+
+	n, err := i.WriteMessage(nil, buf)
+	if err != nil {
+		t.Fatalf("msg0 write: %v", err)
+	}
+	if _, err = r.ReadMessage(buf[:n], payloadBuf); err != nil {
+		t.Fatalf("msg0 read: %v", err)
+	}
+
+	n, err = r.WriteMessage(nil, buf)
+	if err != nil {
+		t.Fatalf("msg1 write: %v", err)
+	}
+	if _, err = i.ReadMessage(buf[:n], payloadBuf); err != nil {
+		t.Fatalf("msg1 read: %v", err)
+	}
+
+	if !i.IsFinished() || !r.IsFinished() {
+		t.Fatal("handshake should be finished")
+	}
+
+	tsI, err := i.Finalize()
+	if err != nil {
+		t.Fatalf("initiator Finalize: %v", err)
+	}
+	defer tsI.Destroy()
+
+	tsR, err := r.Finalize()
+	if err != nil {
+		t.Fatalf("responder Finalize: %v", err)
+	}
+	defer tsR.Destroy()
+
+	payload := []byte("hybrid IK aes-sha512 payload")
+	n, err = tsI.Send(payload, buf)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	pn, err := tsR.Receive(buf[:n], payloadBuf)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	if string(payloadBuf[:pn]) != string(payload) {
+		t.Fatal("payload mismatch")
+	}
+}

@@ -202,6 +202,29 @@ func TestHkdfExpand_LengthLimits(t *testing.T) {
 	if err != nil || len(out) != 255*32 {
 		t.Fatalf("expand at RFC limit should succeed: %v", err)
 	}
+
+	// Overflow probes: n near MaxInt must error, never wrap negative and
+	// panic in make.
+	const maxInt = int(^uint(0) >> 1)
+	for _, n := range []int{maxInt, maxInt - 1, maxInt - 31} {
+		if _, err := hkdfExpand(h, prk, nil, n); err == nil {
+			t.Fatalf("expand length %d must error, not overflow", n)
+		}
+	}
+}
+
+// hugeLenHash declares an absurd HashLen whose 255x block buffer would
+// overflow int: hkdfExpand must error, never panic on a negative make
+// capacity.
+type hugeLenHash struct{ testSha256 }
+
+func (hugeLenHash) HashLen() int  { return int(^uint(0)>>1) - 1 }
+func (hugeLenHash) BlockLen() int { return int(^uint(0) >> 1) }
+
+func TestHkdfExpand_HostileHashLenNoPanic(t *testing.T) {
+	if _, err := hkdfExpand(&hugeLenHash{}, []byte{0x01}, nil, 64); err == nil {
+		t.Fatal("absurd HashLen must error, not panic or allocate")
+	}
 }
 
 // --- independent oracle cross-check: full construction, all four HashFuncs ---
@@ -678,6 +701,111 @@ func TestSEECPRF_HostileHashFuncRejected(t *testing.T) {
 	_, err = hkdfExpand(&shortSumHash{}, bytes.Repeat([]byte{0x0d}, 32), nil, 64)
 	if err == nil {
 		t.Fatal("hkdfExpand must reject short HMAC blocks")
+	}
+}
+
+// scriptedHash wraps testSha256 but lets each successive HMAC instance
+// misbehave per a script: "" = honest, "err" = Write refuses, "short" =
+// truncated Sum. Instance order through SEECPRF: 1 = constructor Extract,
+// 2 = GenRand re-key, 3 = expand T(1), 4 = expand T(2), ...
+type scriptedHash struct {
+	testSha256
+	script []string
+	calls  int
+}
+
+func (s *scriptedHash) NewHMAC(key []byte) HMACWriter {
+	mode := ""
+	if s.calls < len(s.script) {
+		mode = s.script[s.calls]
+	}
+	s.calls++
+	return &scriptedHMAC{inner: (&testSha256{}).NewHMAC(key), mode: mode}
+}
+
+type scriptedHMAC struct {
+	inner HMACWriter
+	mode  string
+}
+
+func (m *scriptedHMAC) Write(p []byte) (int, error) {
+	if m.mode == "err" {
+		return 0, errors.New("hmac write refused")
+	}
+	return m.inner.Write(p)
+}
+
+func (m *scriptedHMAC) Sum() []byte {
+	s := m.inner.Sum()
+	if m.mode == "short" {
+		return s[:16]
+	}
+	return s
+}
+
+// TestSEECPRF_HMACFailurePaths drives every internal HMAC failure branch:
+// each must fail closed with ErrSEEC, never return partial output.
+func TestSEECPRF_HMACFailurePaths(t *testing.T) {
+	rng := func() io.Reader { return bytes.NewReader(bytes.Repeat([]byte{0x31}, 32)) }
+
+	// Constructor Extract fails.
+	if _, err := NewSEECPRF(&scriptedHash{script: []string{"err"}}, testSecret()); err == nil {
+		t.Fatal("constructor must reject failing Extract")
+	} else if !errors.Is(err, ErrSEEC) {
+		t.Fatalf("error must wrap ErrSEEC, got: %v", err)
+	}
+
+	// GenRand re-key HMAC fails (construction honest, second instance errs).
+	s, err := NewSEECPRF(&scriptedHash{script: []string{"", "err"}}, testSecret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.GenRand(rng(), SEECKeygen, 32); err == nil || out != nil {
+		t.Fatalf("re-key failure must fail closed with nil output, got (%v, %v)", out, err)
+	} else if !errors.Is(err, ErrSEEC) {
+		t.Fatalf("error must wrap ErrSEEC, got: %v", err)
+	}
+
+	// Expand T(1) HMAC fails.
+	s, err = NewSEECPRF(&scriptedHash{script: []string{"", "", "err"}}, testSecret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.GenRand(rng(), SEECKeygen, 32); err == nil || out != nil {
+		t.Fatalf("expand T(1) failure must fail closed, got (%v, %v)", out, err)
+	}
+
+	// Expand T(1) returns a short block.
+	s, err = NewSEECPRF(&scriptedHash{script: []string{"", "", "short"}}, testSecret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.GenRand(rng(), SEECKeygen, 32); err == nil || out != nil {
+		t.Fatalf("expand short T(1) must fail closed, got (%v, %v)", out, err)
+	}
+}
+
+// zeroLenHash declares HashLen 0: hkdfExpand must reject it directly
+// (the constructor's geometry check is not in the direct-call path).
+type zeroLenHash struct{ testSha256 }
+
+func (zeroLenHash) HashLen() int { return 0 }
+
+func TestHkdfExpand_MidChainFailures(t *testing.T) {
+	prk := bytes.Repeat([]byte{0x0d}, 32)
+
+	if _, err := hkdfExpand(&zeroLenHash{}, prk, nil, 32); err == nil {
+		t.Fatal("zero hash length must error")
+	}
+
+	// T(2) HMAC fails mid-chain (2-block expand, first instance honest).
+	if _, err := hkdfExpand(&scriptedHash{script: []string{"", "err"}}, prk, nil, 64); err == nil {
+		t.Fatal("mid-chain HMAC failure must error")
+	}
+
+	// T(2) shrinks mid-chain.
+	if _, err := hkdfExpand(&scriptedHash{script: []string{"", "short"}}, prk, nil, 64); err == nil {
+		t.Fatal("mid-chain size change must error")
 	}
 }
 

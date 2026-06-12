@@ -249,15 +249,39 @@ func hkdfExpand(h HashFunc, prk, info []byte, n int) ([]byte, error) {
 	if n < 1 {
 		return nil, fmt.Errorf("%w: expand length %d below 1", ErrSEEC, n)
 	}
-	blocks := (n + hashLen - 1) / hashLen
+	// Overflow-free ceiling division: (n + hashLen - 1) would wrap negative
+	// for n near MaxInt, slip past the block-count check, and panic in make
+	// with a negative capacity. (n-1)/hashLen involves no addition, and
+	// comparing block COUNTS avoids 255*hashLen, which a hostile HashFunc
+	// declaring a huge HashLen could overflow too.
+	blocks := (n-1)/hashLen + 1
 	if blocks > 255 {
-		return nil, fmt.Errorf("%w: expand length %d exceeds RFC 5869 limit of %d",
-			ErrSEEC, n, 255*hashLen)
+		return nil, fmt.Errorf("%w: expand length %d exceeds the RFC 5869 limit of 255 blocks of %d bytes",
+			ErrSEEC, n, hashLen)
+	}
+
+	// Compute T(1) BEFORE allocating the chain buffer: the buffer is sized
+	// from the declared hashLen, and a buggy HashFunc declaring an absurd
+	// length would otherwise drive make into an unallocatable capacity
+	// (runtime panic). Validating the declaration against an ACTUAL HMAC
+	// output first means the allocation below is sized by proven reality.
+	// (A HashFunc is a consumer-chosen component; these guards fail closed
+	// on BUGGY implementations - wrong constants, truncated sums - which
+	// is the realistic class.)
+	t, err := hmacHash(h, prk, info, []byte{1})
+	if err != nil {
+		return nil, err
+	}
+	if len(t) != hashLen {
+		zeroSlice(t)
+		return nil, fmt.Errorf("%w: HMAC returned %d-byte block for declared hash length %d",
+			ErrSEEC, len(t), hashLen)
 	}
 
 	buf := make([]byte, 0, blocks*hashLen)
-	var prev []byte
-	for i := 1; i <= blocks; i++ {
+	buf = append(buf, t...)
+	prev := t
+	for i := 2; i <= blocks; i++ {
 		t, err := hmacHash(h, prk, prev, info, []byte{byte(i)})
 		if err != nil {
 			zeroSlice(prev)
@@ -265,9 +289,9 @@ func hkdfExpand(h HashFunc, prk, info []byte, n int) ([]byte, error) {
 			return nil, err
 		}
 		if len(t) != hashLen {
-			// A hostile or broken HMACWriter violated the declared hash
-			// length; the chain accounting (and buf's no-realloc zeroing
-			// guarantee) no longer holds. Fail closed.
+			// The HMACWriter changed output size mid-chain; the chain
+			// accounting (and buf's no-realloc zeroing guarantee) no
+			// longer holds. Fail closed.
 			zeroSlice(t)
 			zeroSlice(prev)
 			zeroSlice(buf)

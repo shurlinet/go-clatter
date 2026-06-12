@@ -2,21 +2,11 @@ package hashfuncs_test
 
 import (
 	"bytes"
-	"encoding/hex"
 	"testing"
 
 	"github.com/shurlinet/go-clatter/crypto/sign/slhdsa/hashfuncs"
 	"github.com/shurlinet/go-clatter/crypto/sign/slhdsa/internal"
 )
-
-func mustHex(t *testing.T, s string) []byte {
-	t.Helper()
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		t.Fatalf("hex decode: %v", err)
-	}
-	return b
-}
 
 // Regression oracle values extracted from Trail of Bits internal tests.
 // These are FIPS 205 constants that never change.
