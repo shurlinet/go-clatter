@@ -125,6 +125,13 @@ func NewSEECPRF(h HashFunc, secret []byte) (*SEECPRF, error) {
 	if h == nil {
 		return nil, fmt.Errorf("%w: nil HashFunc", ErrSEEC)
 	}
+	if hl, bl := h.HashLen(), h.BlockLen(); hl <= 0 || bl <= 0 || hl > bl {
+		// The per-call re-key uses prk (HashLen bytes) as an HMAC key,
+		// which hmacHash rejects above BlockLen. Surface impossible
+		// geometry at construction, not on the first handshake draw.
+		return nil, fmt.Errorf("%w: HashFunc geometry unusable: hash length %d, block length %d (re-keying requires 0 < hash length <= block length)",
+			ErrSEEC, hl, bl)
+	}
 	if len(secret) != 32 {
 		return nil, fmt.Errorf("%w: secret must be exactly 32 bytes, got %d", ErrSEEC, len(secret))
 	}
@@ -145,7 +152,7 @@ func NewSEECPRF(h HashFunc, secret []byte) (*SEECPRF, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSEEC, err)
 	}
-	if hl := h.HashLen(); hl <= 0 || len(prk) != hl {
+	if len(prk) != h.HashLen() {
 		zeroSlice(prk)
 		return nil, fmt.Errorf("%w: HashFunc returned %d-byte HMAC output for declared hash length %d",
 			ErrSEEC, len(prk), h.HashLen())
@@ -160,7 +167,10 @@ func NewSEECPRF(h HashFunc, secret []byte) (*SEECPRF, error) {
 //
 // Any rng anomaly (short source, error alongside a full read, EOF, nil
 // rng) fails closed with an error wrapping ErrSEEC. After Destroy, the
-// returned error wraps both ErrSEEC and ErrDestroyed.
+// returned error wraps both ErrSEEC and ErrDestroyed; note that the
+// fresh draw happens before the destroyed check (drawing must not hold
+// the lock), so a destroyed instance still consumes 32 bytes from rng
+// before returning the error.
 func (s *SEECPRF) GenRand(rng io.Reader, purpose SEECPurpose, n int) ([]byte, error) {
 	if rng == nil {
 		return nil, fmt.Errorf("%w: nil rng", ErrSEEC)

@@ -1,6 +1,7 @@
 package clatter_test
 
 import (
+	"bytes"
 	"testing"
 
 	clatter "github.com/shurlinet/go-clatter"
@@ -358,6 +359,45 @@ func FuzzHybridTransport(f *testing.F) {
 
 			aliceT.Destroy()
 			bobT.Destroy()
+		}
+	})
+}
+
+// FuzzSEECPRF drives the exported SEEC surface with arbitrary secrets,
+// purposes, output lengths, and rng streams. Contract under fuzz: never
+// panic; invalid inputs error with nil output; valid inputs yield exactly
+// n bytes, deterministic in (secret, r, purpose, n); a destroyed instance
+// always errors.
+func FuzzSEECPRF(f *testing.F) {
+	f.Add(bytes.Repeat([]byte{0x42}, 32), byte(1), 32, bytes.Repeat([]byte{0x07}, 32))
+	f.Add(bytes.Repeat([]byte{0x01}, 32), byte(2), 255, bytes.Repeat([]byte{0xFF}, 64))
+	f.Add([]byte{1}, byte(0), 0, []byte{})
+	f.Add(make([]byte, 32), byte(9), 64, make([]byte, 16))
+
+	f.Fuzz(func(t *testing.T, secret []byte, purpose byte, n int, rngBytes []byte) {
+		s, err := clatter.NewSEECPRF(hash.NewSha256(), secret)
+		if err != nil {
+			return // invalid secret correctly rejected
+		}
+
+		out, err := s.GenRand(bytes.NewReader(rngBytes), clatter.SEECPurpose(purpose), n)
+		if err != nil {
+			if out != nil {
+				t.Fatal("GenRand returned output alongside an error")
+			}
+		} else {
+			if len(out) != n {
+				t.Fatalf("GenRand returned %d bytes, want %d", len(out), n)
+			}
+			out2, err2 := s.GenRand(bytes.NewReader(rngBytes), clatter.SEECPurpose(purpose), n)
+			if err2 != nil || !bytes.Equal(out, out2) {
+				t.Fatal("GenRand not deterministic in (secret, r, purpose, n)")
+			}
+		}
+
+		s.Destroy()
+		if _, err := s.GenRand(bytes.NewReader(rngBytes), clatter.SEECPurpose(purpose), n); err == nil {
+			t.Fatal("GenRand after Destroy must error")
 		}
 	})
 }

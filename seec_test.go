@@ -579,6 +579,23 @@ type truncatingHMAC struct{ inner HMACWriter }
 func (t *truncatingHMAC) Write(p []byte) (int, error) { return t.inner.Write(p) }
 func (t *truncatingHMAC) Sum() []byte                 { return t.inner.Sum()[:16] }
 
+// badGeometryHash declares HashLen > BlockLen: its prk could never be
+// used as an HMAC re-key. Must be rejected at construction (SEEC-16:
+// config errors surface at construction, not on the first handshake draw).
+type badGeometryHash struct{ testSha256 }
+
+func (b *badGeometryHash) HashLen() int { return 65 }
+
+func TestNewSEECPRF_BadGeometryRejected(t *testing.T) {
+	_, err := NewSEECPRF(&badGeometryHash{}, testSecret())
+	if err == nil {
+		t.Fatal("constructor must reject HashLen > BlockLen")
+	}
+	if !errors.Is(err, ErrSEEC) {
+		t.Fatalf("error must wrap ErrSEEC, got: %v", err)
+	}
+}
+
 func TestSEECPRF_HostileHashFuncRejected(t *testing.T) {
 	// Constructor catches it: prk length != declared HashLen.
 	_, err := NewSEECPRF(&shortSumHash{}, testSecret())

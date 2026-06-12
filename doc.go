@@ -41,6 +41,16 @@
 // TransportState inherits the limit from the handshake that created it.
 // Use TransportState.MaxMessageLen() to query the active limit.
 //
+// # SEEC
+//
+// SEEC (Static-Ephemeral Entropy Combination; PQNoise paper, Definition 14
+// and Appendix C) hedges randomness with a long-lived 32-byte secret:
+// output coins stay unpredictable if either the secret or the fresh RNG
+// draw is uncompromised. [SEEC] is the pluggable seam; [SEECPRF] is the
+// built-in software instantiation (RFC 5869 Extract-then-Expand over the
+// library's HMAC construction). SEEC hedges coin secrecy, never coin
+// freshness: under a repeating RNG the same coins recur by design.
+//
 // # Experimental Algorithms
 //
 // Pre-FIPS algorithms (HQC) require two deliberate opt-ins: the "hqc" build
