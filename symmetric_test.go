@@ -696,3 +696,93 @@ func TestHmacHash_ShortWriteRejected(t *testing.T) {
 		t.Fatal("hmacHash accepted a short write")
 	}
 }
+
+// shortOutputHash declares HashLen 32 but its Hash() and HMAC Sum() each
+// return only 16 bytes - a HashFunc that violates its own length
+// contract. A consumer can install ANY HashFunc via CipherSuite.Hash, so
+// the SymmetricState/HKDF path must fail closed (clean error or latched
+// error state), never panic with slice-out-of-range.
+type shortOutputHash struct{}
+
+func (shortOutputHash) Name() string            { return "SHORT" }
+func (shortOutputHash) HashLen() int            { return 32 }
+func (shortOutputHash) BlockLen() int           { return 64 }
+func (shortOutputHash) Hash(data []byte) []byte { return make([]byte, 16) }
+func (shortOutputHash) NewHMAC(key []byte) HMACWriter {
+	return &shortOutputHMAC{mac: hmac.New(sha256.New, key)}
+}
+
+type shortOutputHMAC struct {
+	mac interface {
+		Write([]byte) (int, error)
+		Sum([]byte) []byte
+	}
+}
+
+func (m *shortOutputHMAC) Write(p []byte) (int, error) { return m.mac.Write(p) }
+func (m *shortOutputHMAC) Sum() []byte                 { return m.mac.Sum(nil)[:16] }
+
+// TestSymmetricState_ShortHashMixKeyNoPanic: MixKey with a short-HMAC
+// HashFunc must return a clean error, never panic on newCk[:hashLen].
+func TestSymmetricState_ShortHashMixKeyNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("MixKey panicked on short-output hash: %v", r)
+		}
+	}()
+	ss := InitializeSymmetric(shortOutputHash{}, &testCipher{}, "test")
+	if err := ss.MixKey([]byte("input key material")); err == nil {
+		t.Fatal("MixKey with a length-violating hash must error")
+	}
+}
+
+// TestSymmetricState_ShortHashEncryptNoPanic: EncryptAndHash -> MixHash
+// with a short-Hash HashFunc must fail closed, never panic on
+// hashed[:hashLen].
+func TestSymmetricState_ShortHashEncryptNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("EncryptAndHash panicked on short-output hash: %v", r)
+		}
+	}()
+	ss := InitializeSymmetric(shortOutputHash{}, &testCipher{}, "test")
+	// EncryptAndHash (no key yet) copies plaintext then MixHashes the
+	// ciphertext; MixHash calls Hash() which returns 16 bytes.
+	_, _ = ss.EncryptAndHash([]byte("hello"))
+	if ss.Err() == nil {
+		t.Fatal("MixHash with a length-violating hash must latch an error")
+	}
+}
+
+// TestSymmetricState_ShortHashLongNameNoPanic: InitializeSymmetric with a
+// name long enough to be HASHED (not padded) and a short-Hash HashFunc
+// must latch an error, never silently produce a wrong-length h.
+func TestSymmetricState_ShortHashLongNameNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("InitializeSymmetric panicked: %v", r)
+		}
+	}()
+	longName := "this-protocol-name-is-deliberately-longer-than-thirty-two-bytes"
+	ss := InitializeSymmetric(shortOutputHash{}, &testCipher{}, longName)
+	if ss.Err() == nil {
+		t.Fatal("InitializeSymmetric must latch an error when Hash() violates its length contract")
+	}
+}
+
+// TestHKDF2_ShortOutputRejected / TestHKDF3_ShortOutputRejected: the HKDF
+// functions must reject (not truncate-or-pass) a hash whose HMAC output
+// length disagrees with its declared HashLen.
+func TestHKDF2_ShortOutputRejected(t *testing.T) {
+	_, _, err := HKDF2(shortOutputHash{}, make([]byte, 32), []byte("ikm"))
+	if err == nil {
+		t.Fatal("HKDF2 must reject a length-violating hash")
+	}
+}
+
+func TestHKDF3_ShortOutputRejected(t *testing.T) {
+	_, _, _, err := HKDF3(shortOutputHash{}, make([]byte, 32), []byte("ikm"))
+	if err == nil {
+		t.Fatal("HKDF3 must reject a length-violating hash")
+	}
+}

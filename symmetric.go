@@ -46,6 +46,15 @@ func InitializeSymmetric(h HashFunc, c Cipher, protocolName string) *SymmetricSt
 	} else {
 		// Hash the protocol name
 		hashed := h.Hash(nameBytes)
+		if len(hashed) != ss.hashLen {
+			// A length-violating HashFunc would otherwise under-fill h
+			// silently (a wrong, short transcript). Latch into error so
+			// the first mutating operation fails closed.
+			zeroSlice(hashed)
+			ss.SetError(fmt.Errorf("%w: Hash output length %d != hash length %d",
+				ErrCipher, len(hashed), ss.hashLen))
+			return ss
+		}
 		copy(ss.h[:], hashed)
 		zeroSlice(hashed)
 	}
@@ -79,6 +88,15 @@ func (ss *SymmetricState) MixHash(data []byte) {
 	copy(combined[ss.hashLen:], data)
 	hashed := ss.hash.Hash(combined)
 	zeroSlice(combined)
+	if len(hashed) != ss.hashLen {
+		// A HashFunc whose Hash() output disagrees with its declared
+		// HashLen() would panic on hashed[:ss.hashLen]. Fail closed:
+		// latch the state into error rather than slice-out-of-range.
+		zeroSlice(hashed)
+		ss.SetError(fmt.Errorf("%w: Hash output length %d != hash length %d",
+			ErrCipher, len(hashed), ss.hashLen))
+		return
+	}
 	copy(ss.h[:], hashed[:ss.hashLen])
 }
 

@@ -84,12 +84,18 @@ func HKDF2(h HashFunc, ck, ikm []byte) (out1, out2 []byte, err error) {
 		return nil, nil, fmt.Errorf("HKDF2 expand2: %w", err)
 	}
 
-	// Truncate to hashLen
-	if len(out1) > hashLen {
-		out1 = out1[:hashLen]
-	}
-	if len(out2) > hashLen {
-		out2 = out2[:hashLen]
+	// Reject any HashFunc whose HMAC output length disagrees with its
+	// declared HashLen(). Such a slice would otherwise flow to callers
+	// that index it to [:hashLen] (SymmetricState.MixKey/Split) and panic
+	// with slice-out-of-range. Fail closed, mirroring seec.go's hkdfExpand
+	// per-block length check. For every correct HashFunc, HMAC output is
+	// exactly hashLen, so this never fires (the prior > hashLen truncation
+	// was likewise never reached).
+	if len(out1) != hashLen || len(out2) != hashLen {
+		zeroSlice(out1)
+		zeroSlice(out2)
+		return nil, nil, fmt.Errorf("%w: HKDF output length (%d, %d) != hash length %d",
+			ErrCipher, len(out1), len(out2), hashLen)
 	}
 
 	return out1, out2, nil
@@ -132,14 +138,14 @@ func HKDF3(h HashFunc, ck, ikm []byte) (out1, out2, out3 []byte, err error) {
 		return nil, nil, nil, fmt.Errorf("HKDF3 expand3: %w", err)
 	}
 
-	if len(out1) > hashLen {
-		out1 = out1[:hashLen]
-	}
-	if len(out2) > hashLen {
-		out2 = out2[:hashLen]
-	}
-	if len(out3) > hashLen {
-		out3 = out3[:hashLen]
+	// Reject a length-violating HashFunc (see HKDF2). Never fires for a
+	// correct hash; prevents a short slice from panicking MixKeyAndHash.
+	if len(out1) != hashLen || len(out2) != hashLen || len(out3) != hashLen {
+		zeroSlice(out1)
+		zeroSlice(out2)
+		zeroSlice(out3)
+		return nil, nil, nil, fmt.Errorf("%w: HKDF output length (%d, %d, %d) != hash length %d",
+			ErrCipher, len(out1), len(out2), len(out3), hashLen)
 	}
 
 	return out1, out2, out3, nil
