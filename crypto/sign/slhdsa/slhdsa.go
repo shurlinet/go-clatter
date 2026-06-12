@@ -379,8 +379,10 @@ func (o *SignerOpts) HashFunc() crypto.Hash {
 // For SLH-DSA, the digest parameter is always the FULL message regardless
 // of HashFunc. Pre-hashing is computed internally by the wrapper.
 //
-// If rand is nil, crypto/rand.Reader is used. If opts is nil or
-// opts.HashFunc() == 0, pure mode is used. If opts.HashFunc() != 0,
+// The rand parameter is accepted for crypto.Signer compatibility and is
+// IGNORED: hedged signing always draws its per-signature randomness from
+// crypto/rand internally, regardless of what is passed. If opts is nil
+// or opts.HashFunc() == 0, pure mode is used. If opts.HashFunc() != 0,
 // pre-hash mode is used.
 func (k *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	if k == nil {

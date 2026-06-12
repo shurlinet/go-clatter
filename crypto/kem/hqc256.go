@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	clatter "github.com/shurlinet/go-clatter"
+	"github.com/shurlinet/go-clatter/internal/entropy"
 	"github.com/shurlinet/go-hqc"
 	"github.com/shurlinet/go-hqc/hqctest"
 )
@@ -62,8 +63,8 @@ func (k *Hqc256) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 		}
 	}()
 
-	if _, err := rng.Read(seed[:]); err != nil {
-		return clatter.KeyPair{}, fmt.Errorf("%w: %v", clatter.ErrKEM, err)
+	if err := entropy.Fill(rng, seed[:]); err != nil {
+		return clatter.KeyPair{}, fmt.Errorf("%w: %w", clatter.ErrKEM, err)
 	}
 
 	dk, err := hqc.NewDecapsulationKey256(seed[:])
@@ -94,16 +95,16 @@ func (k *Hqc256) Encapsulate(pk []byte, rng clatter.RNG) (ct, ss []byte, err err
 	}
 
 	if k.testing {
-		var entropy [48]byte // 32 bytes m + 16 bytes salt
+		var coins [48]byte // 32 bytes m + 16 bytes salt
 		defer func() {
-			for i := range entropy {
-				entropy[i] = 0
+			for i := range coins {
+				coins[i] = 0
 			}
 		}()
-		if _, err := rng.Read(entropy[:]); err != nil {
-			return nil, nil, fmt.Errorf("%w: %v", clatter.ErrKEM, err)
+		if err := entropy.Fill(rng, coins[:]); err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", clatter.ErrKEM, err)
 		}
-		sharedSecret, ciphertext := hqctest.Encapsulate256(ek, bytes.NewReader(entropy[:]))
+		sharedSecret, ciphertext := hqctest.Encapsulate256(ek, bytes.NewReader(coins[:]))
 		return ciphertext, sharedSecret, nil
 	}
 

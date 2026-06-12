@@ -96,7 +96,8 @@ func TestHKDF2_CounterBytesNotASCII(t *testing.T) {
 	}
 }
 
-// F53: Verify manual HKDF matches Noise spec, NOT RFC 5869.
+// Verify manual HKDF matches the Noise spec chain (which is RFC 5869
+// HKDF with salt = ck and empty info - see hash.go header).
 func TestHKDF2_MatchesNoiseSpec(t *testing.T) {
 	h := &testSha256{}
 	ck := bytes.Repeat([]byte{0x01}, 32)

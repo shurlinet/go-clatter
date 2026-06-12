@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	clatter "github.com/shurlinet/go-clatter"
+	"github.com/shurlinet/go-clatter/internal/entropy"
 )
 
 // X25519 implements the X25519 DH algorithm.
@@ -30,8 +31,8 @@ func (x *X25519) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 		}
 	}()
 
-	if _, err := rng.Read(seed[:]); err != nil {
-		return clatter.KeyPair{}, fmt.Errorf("%w: %v", clatter.ErrDH, err)
+	if err := entropy.Fill(rng, seed[:]); err != nil {
+		return clatter.KeyPair{}, fmt.Errorf("%w: %w", clatter.ErrDH, err)
 	}
 
 	privKey, err := ecdh.X25519().NewPrivateKey(seed[:])

@@ -4,10 +4,14 @@ import "fmt"
 
 // Manual HKDF implementation matching Noise spec and Rust Clatter exactly.
 //
-// This is NOT RFC 5869 HKDF. Noise's HKDF has no salt/extract separation;
-// the chaining key IS the HMAC key directly. Do NOT substitute Go's
-// x/crypto/hkdf package, which implements RFC 5869 and would silently
-// produce wrong output.
+// Noise's HKDF IS RFC 5869 HKDF with salt = ck and empty info (Noise spec
+// rev 34, section 4.3): Extract is temp_key = HMAC(ck, ikm) with the
+// chaining key in the salt/key position, and Expand with empty info is
+// exactly the output chain below. x/crypto/hkdf with salt = ck produces
+// byte-identical output (verified empirically across SHA-256 and SHA-512,
+// including empty ikm). This manual implementation exists for HashFunc
+// parameterization and explicit zeroing control, not because the standard
+// libraries would be wrong.
 //
 // Counter bytes are raw byte values (0x01, 0x02, 0x03), not ASCII digits.
 // Multiple data slices are fed via sequential HMAC Write calls (equivalent

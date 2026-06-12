@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	clatter "github.com/shurlinet/go-clatter"
+	"github.com/shurlinet/go-clatter/internal/entropy"
 )
 
 // MlKem768 implements ML-KEM-768 (FIPS 203) using Go's crypto/mlkem.
@@ -49,8 +50,8 @@ func (k *MlKem768) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 		}
 	}()
 
-	if _, err := rng.Read(seed[:]); err != nil {
-		return clatter.KeyPair{}, fmt.Errorf("%w: %v", clatter.ErrKEM, err)
+	if err := entropy.Fill(rng, seed[:]); err != nil {
+		return clatter.KeyPair{}, fmt.Errorf("%w: %w", clatter.ErrKEM, err)
 	}
 
 	dk, err := mlkem.NewDecapsulationKey768(seed[:])
@@ -73,18 +74,18 @@ func (k *MlKem768) Encapsulate(pk []byte, rng clatter.RNG) (ct, ss []byte, err e
 	}
 
 	if k.testing {
-		// Deterministic: read 32 bytes from rng as entropy
-		var entropy [32]byte
+		// Deterministic: read 32 bytes from rng as encapsulation coins
+		var coins [32]byte
 		defer func() {
-			for i := range entropy {
-				entropy[i] = 0
+			for i := range coins {
+				coins[i] = 0
 			}
 		}()
-		if _, err := rng.Read(entropy[:]); err != nil {
-			return nil, nil, fmt.Errorf("%w: %v", clatter.ErrKEM, err)
+		if err := entropy.Fill(rng, coins[:]); err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", clatter.ErrKEM, err)
 		}
 		// mlkemtest.Encapsulate768 returns (sharedKey, ciphertext, err)
-		sharedKey, ciphertext, err := mlkemtest.Encapsulate768(ek, entropy[:])
+		sharedKey, ciphertext, err := mlkemtest.Encapsulate768(ek, coins[:])
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", clatter.ErrKEM, err)
 		}
