@@ -85,10 +85,17 @@ const maxSEECOutputLen = 255
 //	  out  = HKDF-Expand(k_r, info = purpose || uint8(n), n)
 //
 // The per-call re-key makes both security directions rest on named,
-// studied assumptions: with the secret uncompromised, HMAC(prk, ·) is a
-// standard PRF; with the secret revealed but coins good, HMAC keyed by a
-// public prk over a full-message uniform r is the proven dual-PRF (swap)
-// case. Burying r inside Expand info would not be theorem-backed.
+// studied assumptions. With the secret uncompromised, HMAC(prk, ·) is a
+// standard PRF keyed by the secret. With the secret revealed but coins
+// good, security rests on HMAC's swap-PRF ("dual-PRF") property
+// (Backendal-Bellare-Günther-Scarlata): HMAC keyed by the public prk over
+// the full-message input r. That property is conditional, not
+// unconditional - it is established when the swapped input is uniform and
+// fixed-length, which r (32 uniform bytes) satisfies. It is a
+// computational assumption, weaker than the information-theoretic
+// guarantee of the paper's PRP-SEEC variant (which go-clatter does not
+// port). Burying r inside the Expand info instead of re-keying would not
+// even reach this assumption.
 //
 // A SEECPRF is safe for concurrent use by multiple handshakes. The
 // long-lived secret is the paper's model: one shared instance per process
@@ -163,7 +170,10 @@ func NewSEECPRF(h HashFunc, secret []byte) (*SEECPRF, error) {
 
 // GenRand implements SEEC. It draws 32 bytes of fresh entropy from rng,
 // re-keys the PRF with them, and expands to n bytes bound to purpose and n.
-// n must be in [1, 255].
+// n must be in [1, 255]. Output narrower than ~16 bytes has correspondingly
+// small collision resistance (an 8-bit draw has only 256 possible values),
+// inherent to any KDF; SEEC's intended uses (keypair seeds, KEM coins)
+// request 32 or more bytes.
 //
 // Any rng anomaly (short source, error alongside a full read, EOF, nil
 // rng) fails closed with an error wrapping ErrSEEC. After Destroy, the

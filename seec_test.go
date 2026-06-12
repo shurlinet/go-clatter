@@ -654,6 +654,42 @@ func TestSEECPRF_FullReadWithEOFFails(t *testing.T) {
 	}
 }
 
+// capturingReader fills each Read with a fixed byte and retains a
+// reference to the exact buffer slice it filled - which aliases GenRand's
+// internal r array - so a test can observe whether that entropy is zeroed
+// after the call returns.
+type capturingReader struct {
+	fill     byte
+	captured []byte
+}
+
+func (c *capturingReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = c.fill
+	}
+	c.captured = p
+	return len(p), nil
+}
+
+// TestSEECPRF_DrawnEntropyZeroed pins the zeroing of the fresh per-call
+// entropy r: without it, secret-adjacent material would linger in memory.
+// (Kills the surviving zeroSlice(r[:]) mutation the audit found.)
+func TestSEECPRF_DrawnEntropyZeroed(t *testing.T) {
+	s := mustSEECPRF(t, &testSha256{})
+	cr := &capturingReader{fill: 0xAB}
+	if _, err := s.GenRand(cr, SEECKeygen, 32); err != nil {
+		t.Fatalf("GenRand: %v", err)
+	}
+	if cr.captured == nil {
+		t.Fatal("reader never received the entropy buffer")
+	}
+	for i, b := range cr.captured {
+		if b != 0 {
+			t.Fatalf("drawn entropy not zeroed after GenRand: byte %d = 0x%02x", i, b)
+		}
+	}
+}
+
 // --- hostile HashFunc ---
 
 // shortSumHash declares HashLen 32 but its HMAC returns 16-byte sums:
@@ -681,6 +717,38 @@ func TestNewSEECPRF_BadGeometryRejected(t *testing.T) {
 	_, err := NewSEECPRF(&badGeometryHash{}, testSecret())
 	if err == nil {
 		t.Fatal("constructor must reject HashLen > BlockLen")
+	}
+	if !errors.Is(err, ErrSEEC) {
+		t.Fatalf("error must wrap ErrSEEC, got: %v", err)
+	}
+}
+
+// bigConsistentHash declares HashLen 100 > BlockLen 64 with a CONSISTENT
+// 100-byte HMAC output, so the prk-length check passes (100 == 100) and
+// ONLY the geometry guard can reject it. Without that guard the instance
+// would construct and then fail on the first GenRand re-key (a 100-byte
+// prk is too long to be an HMAC key) - the exact SEEC-16 mid-handshake
+// trap the construction-time guard exists to prevent.
+type bigConsistentHash struct{}
+
+func (bigConsistentHash) Name() string                  { return "BIG" }
+func (bigConsistentHash) HashLen() int                  { return 100 }
+func (bigConsistentHash) BlockLen() int                 { return 64 }
+func (bigConsistentHash) Hash(data []byte) []byte       { return make([]byte, 100) }
+func (bigConsistentHash) NewHMAC(key []byte) HMACWriter { return bigHMAC{} }
+
+type bigHMAC struct{}
+
+func (bigHMAC) Write(p []byte) (int, error) { return len(p), nil }
+func (bigHMAC) Sum() []byte                 { return make([]byte, 100) }
+
+func TestNewSEECPRF_BigGeometryRejectedAtConstruction(t *testing.T) {
+	// Pins the geometry guard as load-bearing: this hash's consistent
+	// output passes the prk-length check, so only the hl>bl guard catches
+	// it, and only at construction (not the first draw).
+	_, err := NewSEECPRF(bigConsistentHash{}, testSecret())
+	if err == nil {
+		t.Fatal("HashLen > BlockLen with consistent output must be rejected at construction")
 	}
 	if !errors.Is(err, ErrSEEC) {
 		t.Fatalf("error must wrap ErrSEEC, got: %v", err)
