@@ -11,6 +11,7 @@ import (
 	crypto_rand "crypto/rand"
 
 	"github.com/shurlinet/go-clatter/crypto/sign/slhdsa/internal"
+	"github.com/shurlinet/go-clatter/internal/entropy"
 )
 
 // HashFunc identifies a hash function for pre-hash mode (Hash-SLH-DSA).
@@ -209,7 +210,8 @@ func (k *PrivateKey) SignPreHashWithContext(msg []byte, hashFunc HashFunc, ctx s
 	mprime := makeMPrimePreHash(normalizeMsg(msg), hashFunc, ctx)
 	n := int(k.params.N)
 	addrnd := make([]byte, n)
-	if _, err := io.ReadFull(crypto_rand.Reader, addrnd); err != nil {
+	// entropy.Fill for fail-closed reads (see slhdsa.go GenerateKey).
+	if err := entropy.Fill(crypto_rand.Reader, addrnd); err != nil {
 		return nil, fmt.Errorf("slhdsa: generate addrnd: %w", err)
 	}
 	sig := internal.SLHSignInternal(k.params, mprime, k.internalKey, addrnd)

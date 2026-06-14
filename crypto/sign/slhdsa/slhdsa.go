@@ -68,6 +68,7 @@ import (
 	crypto_rand "crypto/rand"
 
 	"github.com/shurlinet/go-clatter/crypto/sign/slhdsa/internal"
+	"github.com/shurlinet/go-clatter/internal/entropy"
 )
 
 // PrivateKey is an SLH-DSA private key.
@@ -109,13 +110,17 @@ func GenerateKey(ps ParamSet) (*PrivateKey, error) {
 	skseed := make([]byte, n)
 	skprf := make([]byte, n)
 	pkseed := make([]byte, n)
-	if _, err := io.ReadFull(crypto_rand.Reader, skseed); err != nil {
+	// entropy.Fill (not io.ReadFull) for fail-closed reads: io.ReadFull is
+	// fail-OPEN on a (full-read + non-nil error) RBG, which would silently
+	// accept seeds from a health-check-failing source. Matches the
+	// library-wide entropy discipline used by the DH/KEM/SEEC paths.
+	if err := entropy.Fill(crypto_rand.Reader, skseed); err != nil {
 		return nil, fmt.Errorf("slhdsa: generate skseed: %w", err)
 	}
-	if _, err := io.ReadFull(crypto_rand.Reader, skprf); err != nil {
+	if err := entropy.Fill(crypto_rand.Reader, skprf); err != nil {
 		return nil, fmt.Errorf("slhdsa: generate skprf: %w", err)
 	}
-	if _, err := io.ReadFull(crypto_rand.Reader, pkseed); err != nil {
+	if err := entropy.Fill(crypto_rand.Reader, pkseed); err != nil {
 		return nil, fmt.Errorf("slhdsa: generate pkseed: %w", err)
 	}
 
@@ -256,7 +261,8 @@ func (k *PrivateKey) signPure(msg []byte, ctx string) ([]byte, error) {
 	mprime := makeMPrime(normalizeMsg(msg), ctx)
 	n := int(k.params.N)
 	addrnd := make([]byte, n)
-	if _, err := io.ReadFull(crypto_rand.Reader, addrnd); err != nil {
+	// entropy.Fill for fail-closed reads (see GenerateKey).
+	if err := entropy.Fill(crypto_rand.Reader, addrnd); err != nil {
 		return nil, fmt.Errorf("slhdsa: generate addrnd: %w", err)
 	}
 	sig := internal.SLHSignInternal(k.params, mprime, k.internalKey, addrnd)
