@@ -38,14 +38,19 @@ type DualLayerHandshake struct {
 // bufSize is the intermediate decrypt buffer size. Must be large enough for
 // all inner handshake messages (calculated at runtime).
 //
-// Options: WithObserver and WithMaxMessageLen are applicable. Other options
-// are ignored. WithMaxMessageLen sets the DualLayer-level limit; the inner
-// handshake's own maxMsgLen is not modified.
+// Options: WithObserver and WithMaxMessageLen are applicable. WithSEEC is
+// REJECTED with an error: the layers are pre-constructed Handshakers, so
+// SEEC must be configured per layer on the inner and outer constructors
+// (silently ignoring it would leave the consumer believing both layers
+// are hedged when neither is). Other options are ignored.
+// WithMaxMessageLen sets the DualLayer-level limit; the inner handshake's
+// own maxMsgLen is not modified.
 //
 // Returns error if:
 //   - outer and inner have different roles (both must be initiator or both responder)
 //   - outer is a one-way pattern (Rust asserts this)
 //   - maxMsgLen is negative or exceeds MaxMessageLen
+//   - WithSEEC was passed (configure SEEC per layer instead)
 func NewDualLayerHandshake(outer, inner Handshaker, bufSize int, opts ...Option) (*DualLayerHandshake, error) {
 	return newDualLayerGeneric(outer, inner, bufSize, opts...)
 }
@@ -72,6 +77,17 @@ func newDualLayerGeneric(outer, inner Handshaker, bufSize int, opts ...Option) (
 	}
 
 	ho := applyOptions(opts)
+
+	// Dual-layer consumes no key options; zero the secret-bearing clones
+	// immediately so ignored options never leave unzeroed key copies.
+	ho.destroyKeyClones()
+
+	// WithSEEC cannot apply at this layer: outer and inner are already
+	// constructed. Reject rather than silently ignore (a consumer who
+	// passed it believes both layers are hedged; neither would be).
+	if ho.seecSet {
+		return nil, fmt.Errorf("%w: WithSEEC is not applicable to dual-layer handshakes: configure SEEC per layer via the inner and outer handshake constructors", ErrSEEC)
+	}
 
 	maxMsgLen, err := resolveMaxMsgLen(ho.maxMsgLen)
 	if err != nil {
@@ -483,7 +499,9 @@ type HybridDualLayerHandshake struct {
 
 // NewHybridDualLayerHandshake creates a hybrid dual-layer handshake.
 // Same as DualLayerHandshake but with domain separator binding.
-// Options: Only WithObserver is applicable.
+// Options: Only WithObserver and WithMaxMessageLen are applicable.
+// WithSEEC is rejected with an error - configure SEEC per layer via the
+// inner and outer handshake constructors.
 func NewHybridDualLayerHandshake(outer, inner Handshaker, bufSize int, opts ...Option) (*HybridDualLayerHandshake, error) {
 	base, err := newDualLayerGeneric(outer, inner, bufSize, opts...)
 	if err != nil {

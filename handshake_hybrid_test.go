@@ -334,16 +334,17 @@ func TestHybridHandshake_IK_RoundTrip(t *testing.T) {
 // --- Interop vector tests ---
 
 func TestHybridHandshake_VectorXX(t *testing.T) {
-	runHybridVectorTest(t, "vectors/hybrid_xx_x25519_mlkem768_chacha_sha256.txt")
+	runHybridVectorTest(t, "vectors/hybrid_xx_x25519_mlkem768_chacha_sha256.txt", 4)
 }
 
 func TestHybridHandshake_VectorIK(t *testing.T) {
-	runHybridVectorTest(t, "vectors/hybrid_ik_x25519_mlkem768_aes_sha512.txt")
+	runHybridVectorTest(t, "vectors/hybrid_ik_x25519_mlkem768_aes_sha512.txt", 2)
 }
 
-func runHybridVectorTest(t *testing.T, path string) {
+func runHybridVectorTest(t *testing.T, path string, wantMsgs int) {
 	t.Helper()
 	v := parseVectorFile(t, path)
+	assertVectorShape(t, path, v, wantMsgs)
 
 	suite := lookupHybridSuite(t, v)
 	pattern := lookupPattern(t, v.pattern)

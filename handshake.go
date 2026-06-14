@@ -87,6 +87,13 @@ type HandshakeInternals struct {
 	// RNG source (injectable for deterministic testing; defaults to crypto/rand.Reader)
 	rng RNG
 
+	// SEEC instance for hedged handshake coins (nil = SEEC off, the
+	// default). The handshake BORROWS the instance: Destroy/setError nil
+	// this reference but never call the instance's own Destroy - the
+	// consumer owns its lifecycle (it is typically shared across many
+	// handshakes, which is the PQNoise paper's model).
+	seec SEEC
+
 	// Atomic guard against concurrent use. Only one goroutine may
 	// call WriteMessage/ReadMessage/Finalize at a time.
 	inUse atomic.Uint32
@@ -162,6 +169,8 @@ func (h *HandshakeInternals) setError(err error) {
 		h.symmetricState = nil
 	}
 	h.destroyKeys()
+	// Drop the borrowed SEEC reference (never destroy it - consumer owns it).
+	h.seec = nil
 }
 
 // destroyKeys zeros all keypair material and nils pointers.
@@ -200,6 +209,7 @@ func (h *HandshakeInternals) Destroy() {
 	h.ownRandApplied = false
 	h.pskApplied = false
 	h.rng = nil
+	h.seec = nil // borrowed reference only; the consumer owns the instance
 	h.ekem = nil
 	h.skem = nil
 	h.observer = nil
@@ -432,6 +442,8 @@ type handshakeOptions struct {
 	rng             RNG
 	observer        Observer
 	maxMsgLen       int // 0 = default (MaxMessageLen = 65535)
+	seec            SEEC
+	seecSet         bool // distinguishes WithSEEC(nil) (rejected) from option absent
 }
 
 // WithStaticKey sets the local static keypair for the handshake.
@@ -483,6 +495,45 @@ func WithPrologue(data []byte) Option {
 func WithRNG(rng RNG) Option {
 	return func(o *handshakeOptions) {
 		o.rng = rng
+	}
+}
+
+// WithSEEC enables Static-Ephemeral Entropy Combination for the handshake:
+// every ephemeral keypair seed (DH and KEM) and every KEM encapsulation
+// coin is drawn through s instead of directly from the handshake rng, so
+// the coins stay unpredictable if EITHER the rng or the SEEC secret is
+// uncompromised (PQNoise paper, eprint 2022/539). SEEC is wire-invisible:
+// a SEEC-enabled party interoperates with any peer, SEEC-enabled or not.
+//
+// The handshake BORROWS s and never destroys it; one long-lived instance
+// shared across many handshakes is the paper's model (the built-in
+// [SEECPRF] is safe for that sharing). Destroying s mid-handshake makes
+// affected handshakes fail closed on their next draw.
+//
+// Constructor behavior:
+//   - WithSEEC(nil) and typed-nil values (e.g. WithSEEC((*SEECPRF)(nil)))
+//     are constructor errors - misconfiguration fails loud, never
+//     silently off.
+//   - PQ and Hybrid constructors require EKEM and SKEM to implement
+//     [CoinsEncapsulator]; otherwise the constructor errors. SEEC never
+//     silently downgrades to keygen-only hedging.
+//   - DualLayer and HybridDualLayer constructors reject WithSEEC;
+//     configure SEEC per layer on the inner and outer handshakes.
+//
+// Interactions:
+//   - WithRNG: the rng still supplies the per-call fresh entropy r; with
+//     SEEC on, production KEM encapsulation coins derive from that rng
+//     stream mixed with the SEEC secret (the v0.5.0 "production
+//     encapsulation ignores rng" behavior no longer applies).
+//   - WithEphemeralKey: a pre-set ephemeral skips key generation, so SEEC
+//     never fires for that token (NQ honors pre-set ephemerals; PQ and
+//     Hybrid do not consume the option).
+//   - Receiving one-way messages draws nothing: SEEC only covers locally
+//     generated coins.
+func WithSEEC(s SEEC) Option {
+	return func(o *handshakeOptions) {
+		o.seec = s
+		o.seecSet = true
 	}
 }
 
@@ -635,4 +686,57 @@ func applyOptions(opts []Option) handshakeOptions {
 		opt(&ho)
 	}
 	return ho
+}
+
+// destroyKeyClones zeroes the secret-bearing keypair clones held by the
+// options struct. Constructors call it (via defer) when construction fails
+// before the clones are consumed, and directly for option keys the
+// handshake family does not use - an ignored WithStaticKey/WithEphemeralKey/
+// WithStaticKEMKey clone must never outlive construction unzeroed.
+func (ho *handshakeOptions) destroyKeyClones() {
+	if ho.staticKey != nil {
+		ho.staticKey.Destroy()
+		ho.staticKey = nil
+	}
+	if ho.ephemeralKey != nil {
+		ho.ephemeralKey.Destroy()
+		ho.ephemeralKey = nil
+	}
+	if ho.staticKEM != nil {
+		ho.staticKEM.Destroy()
+		ho.staticKEM = nil
+	}
+}
+
+// validateSuitePrimitives checks the declared geometry of the
+// consumer-chosen Hash and Cipher at construction, so a violating
+// implementation surfaces as a constructor error instead of a
+// slice-out-of-range panic (HashLen beyond the MaxHashLen state arrays)
+// or silent wire corruption (a tag or key size the protocol's hardcoded
+// framing cannot carry) mid-handshake.
+func validateSuitePrimitives(h HashFunc, c Cipher) error {
+	if hl, bl := h.HashLen(), h.BlockLen(); hl <= 0 || hl > MaxHashLen || bl <= 0 || hl > bl {
+		return fmt.Errorf("%w: HashFunc geometry unusable: hash length %d, block length %d (need 0 < hash length <= block length and hash length <= %d)",
+			ErrInvalidSuite, hl, bl, MaxHashLen)
+	}
+	if tl := c.TagLen(); tl != TagLen {
+		return fmt.Errorf("%w: Cipher tag length %d unsupported (the Noise framing requires %d)",
+			ErrInvalidSuite, tl, TagLen)
+	}
+	if kl := c.KeyLen(); kl != KeyLen {
+		return fmt.Errorf("%w: Cipher key length %d unsupported (the Noise key schedule requires %d)",
+			ErrInvalidSuite, kl, KeyLen)
+	}
+	return nil
+}
+
+// validateKeyLen checks a pre-set public key length from an option against
+// the suite's declared length. A wrong-length key would otherwise produce
+// a silently malformed wire message (overhead math uses the declared
+// length, the copy truncates) that only fails at the remote peer.
+func validateKeyLen(what string, got, want int) error {
+	if got != want {
+		return fmt.Errorf("%w: %s is %d bytes, suite requires %d", ErrInvalidKeyLength, what, got, want)
+	}
+	return nil
 }

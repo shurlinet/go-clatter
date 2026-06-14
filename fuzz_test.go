@@ -229,9 +229,12 @@ func FuzzNqTransport(f *testing.F) {
 
 // FuzzPqHandshakeRead feeds random bytes to PQ ReadMessage.
 // Matches Rust: pq_handshake_read.rs
+// Also drives a SEEC-on pqXX pair per input (C-10vi): the SEEC wiring
+// must never panic on hostile incoming bytes either.
 func FuzzPqHandshakeRead(f *testing.F) {
 	f.Add([]byte{0, 1, 2, 3})
 	f.Add(make([]byte, 256))
+	f.Add(bytes.Repeat([]byte{0xA5}, 1184)) // SEEC-on seed: EKEM pubkey width
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		suite := pqSuite()
@@ -247,6 +250,20 @@ func FuzzPqHandshakeRead(f *testing.F) {
 			alice.Destroy()
 			bob.Destroy()
 		}
+
+		// SEEC-on pair (one pattern keeps the per-input cost low).
+		seecSecret := bytes.Repeat([]byte{0x42}, 32)
+		s, err := clatter.NewSEECPRF(hash.NewSha256(), seecSecret)
+		if err != nil {
+			t.Fatalf("NewSEECPRF: %v", err)
+		}
+		alice, _ := clatter.NewPqHandshake(clatter.PatternPqXX, true, suite, clatter.WithSEEC(s))
+		bob, _ := clatter.NewPqHandshake(clatter.PatternPqXX, false, suite, clatter.WithSEEC(s))
+		_, _ = alice.WriteMessage(nil, buf)
+		safeReadMessage(alice, data, buf)
+		safeReadMessage(bob, data, buf)
+		alice.Destroy()
+		bob.Destroy()
 	})
 }
 

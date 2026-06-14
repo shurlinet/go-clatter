@@ -24,6 +24,9 @@ type Hqc128 struct {
 	testing bool
 }
 
+// Compile-time check: Hqc128 supports SEEC-hedged encapsulation.
+var _ clatter.CoinsEncapsulator = (*Hqc128)(nil)
+
 // NewHqc128 returns an HQC-128 KEM instance for production use.
 func NewHqc128() *Hqc128 { return &Hqc128{testing: false} }
 
@@ -69,7 +72,7 @@ func (k *Hqc128) GenerateKeypair(rng clatter.RNG) (clatter.KeyPair, error) {
 
 	dk, err := hqc.NewDecapsulationKey128(seed[:])
 	if err != nil {
-		return clatter.KeyPair{}, fmt.Errorf("%w: %v", clatter.ErrKEM, err)
+		return clatter.KeyPair{}, fmt.Errorf("%w: %w", clatter.ErrKEM, err)
 	}
 
 	ek := dk.EncapsulationKey()
@@ -89,12 +92,17 @@ func (k *Hqc128) Encapsulate(pk []byte, rng clatter.RNG) (ct, ss []byte, err err
 		return nil, nil, fmt.Errorf("%w: HQC128", clatter.ErrExperimentalNotAllowed)
 	}
 
+	// Parse the public key BEFORE any rng read: an invalid pk must not
+	// consume entropy (preserves the v0.5.0 rng draw order on error
+	// paths, which deterministic-replay consumers can observe).
 	ek, err := hqc.ParseEncapsulationKey128(pk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", clatter.ErrKEMInvalidKey, err)
+		return nil, nil, fmt.Errorf("%w: %w", clatter.ErrKEMInvalidKey, err)
 	}
 
 	if k.testing {
+		// Deterministic: read the coins from rng, then run the same coins
+		// path as EncapsulateWithCoins.
 		var coins [32]byte // 16 bytes m + 16 bytes salt
 		defer func() {
 			for i := range coins {
@@ -104,11 +112,52 @@ func (k *Hqc128) Encapsulate(pk []byte, rng clatter.RNG) (ct, ss []byte, err err
 		if err := entropy.Fill(rng, coins[:]); err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", clatter.ErrKEM, err)
 		}
-		sharedSecret, ciphertext := hqctest.Encapsulate128(ek, bytes.NewReader(coins[:]))
-		return ciphertext, sharedSecret, nil
+		return k.encapsWithCoins(pk, coins[:])
 	}
 
 	sharedSecret, ciphertext := ek.Encapsulate()
+	return ciphertext, sharedSecret, nil
+}
+
+// EncapsCoinsLen returns the encapsulation coin length in bytes
+// (32: 16 bytes m + 16 bytes salt).
+func (k *Hqc128) EncapsCoinsLen() int { return 32 }
+
+// EncapsulateWithCoins encapsulates to pk using externally supplied coins
+// (go-hqc's deterministic encapsulation interface). len(coins) must be
+// exactly 32. Used by SEEC-hedged handshakes; the same (pk, coins) pair
+// always produces the same (ct, ss). Returns
+// [clatter.ErrExperimentalNotAllowed] if [clatter.AllowExperimental] is
+// false: the experimental gate applies to every HQC entry point.
+func (k *Hqc128) EncapsulateWithCoins(pk, coins []byte) (ct, ss []byte, err error) {
+	return k.encapsWithCoins(pk, coins)
+}
+
+// encapsWithCoins is the single coins-driven encapsulation path shared by
+// testing-mode Encapsulate and EncapsulateWithCoins. The experimental gate
+// is enforced here so no coins-driven path can bypass it.
+func (k *Hqc128) encapsWithCoins(pk, coins []byte) (ct, ss []byte, err error) {
+	if !clatter.AllowExperimental.Load() {
+		return nil, nil, fmt.Errorf("%w: HQC128", clatter.ErrExperimentalNotAllowed)
+	}
+
+	if len(coins) != 32 {
+		return nil, nil, fmt.Errorf("%w: encapsulation coins must be 32 bytes, got %d", clatter.ErrKEM, len(coins))
+	}
+
+	ek, err := hqc.ParseEncapsulationKey128(pk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", clatter.ErrKEMInvalidKey, err)
+	}
+
+	sharedSecret, ciphertext := hqctest.Encapsulate128(ek, bytes.NewReader(coins))
+	// Validate the upstream return against the declared geometry: a
+	// truncated ciphertext or shared secret must fail closed here, not
+	// silently truncate at a wire copy downstream.
+	if len(ciphertext) != k.CiphertextLen() || len(sharedSecret) != k.SharedSecretLen() {
+		return nil, nil, fmt.Errorf("%w: encapsulation returned %d-byte ciphertext and %d-byte secret (want %d and %d)",
+			clatter.ErrKEM, len(ciphertext), len(sharedSecret), k.CiphertextLen(), k.SharedSecretLen())
+	}
 	return ciphertext, sharedSecret, nil
 }
 
@@ -127,13 +176,13 @@ func (k *Hqc128) Decapsulate(ct, sk []byte) ([]byte, error) {
 
 	dk, err := hqc.NewDecapsulationKey128(sk)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", clatter.ErrKEMInvalidKey, err)
+		return nil, fmt.Errorf("%w: %w", clatter.ErrKEMInvalidKey, err)
 	}
 	defer dk.Destroy()
 
 	ss, err := dk.Decapsulate(ct)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", clatter.ErrKEMDecapsulate, err)
+		return nil, fmt.Errorf("%w: %w", clatter.ErrKEMDecapsulate, err)
 	}
 
 	return ss, nil

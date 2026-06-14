@@ -38,6 +38,19 @@ func InitializeSymmetric(h HashFunc, c Cipher, protocolName string) *SymmetricSt
 		cipher:  c,
 	}
 
+	// A declared HashLen outside (0, MaxHashLen] would slice-out-of-range
+	// on the fixed h/ck arrays at the first MixHash. Latch into error so
+	// every subsequent operation fails closed instead of panicking (the
+	// handshake constructors additionally reject such suites up front;
+	// this guards direct users of the exported SymmetricState API).
+	if ss.hashLen <= 0 || ss.hashLen > MaxHashLen {
+		declared := ss.hashLen
+		ss.hashLen = 0 // never index the arrays with the bad value
+		ss.SetError(fmt.Errorf("%w: declared hash length %d outside (0, %d]",
+			ErrCipher, declared, MaxHashLen))
+		return ss
+	}
+
 	nameBytes := []byte(protocolName)
 
 	if len(nameBytes) <= ss.hashLen {

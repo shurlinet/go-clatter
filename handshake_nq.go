@@ -37,7 +37,52 @@ func NewNqHandshake(
 		return nil, fmt.Errorf("%w: CipherSuite requires DH, Cipher, and Hash", ErrMissingKey)
 	}
 
+	if err := validateSuitePrimitives(suite.Hash, suite.Cipher); err != nil {
+		return nil, err
+	}
+
 	ho := applyOptions(opts)
+
+	// Zero option key clones if construction fails before they are
+	// consumed (the assignments below hand them to the handshake, whose
+	// own Destroy covers them from then on).
+	consumed := false
+	defer func() {
+		if !consumed {
+			ho.destroyKeyClones()
+		}
+	}()
+
+	// NQ does not use KEM key options; zero the secret-bearing clone now.
+	if ho.staticKEM != nil {
+		ho.staticKEM.Destroy()
+		ho.staticKEM = nil
+	}
+
+	// SEEC option validation (nil and typed-nil rejected). NQ is DH-only:
+	// no KEM capability check needed.
+	if err := validateSEECOption(&ho); err != nil {
+		return nil, err
+	}
+
+	// Pre-set key lengths must match the suite (silent wire truncation
+	// otherwise).
+	dhPubKeyLen := suite.DH.PubKeyLen()
+	if ho.staticKey != nil {
+		if err := validateKeyLen("static key public", len(ho.staticKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
+	if ho.ephemeralKey != nil {
+		if err := validateKeyLen("ephemeral key public", len(ho.ephemeralKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
+	if ho.remoteStatic != nil {
+		if err := validateKeyLen("remote static public", len(ho.remoteStatic), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
 
 	rng := ho.rng
 	if rng == nil {
@@ -54,6 +99,7 @@ func NewNqHandshake(
 	hs.pattern = pattern
 	hs.initiator = initiator
 	hs.rng = rng
+	hs.seec = ho.seec
 	hs.cipher = suite.Cipher
 	hs.hash = suite.Hash
 	hs.maxMsgLen = maxMsgLen
@@ -122,6 +168,7 @@ func NewNqHandshake(
 	// Set initial status
 	hs.determineInitialStatus()
 
+	consumed = true
 	return hs, nil
 }
 
@@ -609,10 +656,12 @@ func (hs *NqHandshake) processReadToken(token Token, reader *messageReader) erro
 // Sets ownRandApplied to satisfy PSK validity requirements.
 func (hs *NqHandshake) writeTokenE(out []byte) (int, error) {
 	if hs.e == nil {
-		// No pre-set ephemeral: generate fresh (normal production path)
-		kp, err := hs.dh.GenerateKeypair(hs.rng)
+		// No pre-set ephemeral: generate fresh (normal production path).
+		// keygenRNG returns hs.rng unchanged with SEEC off, or the
+		// SEEC-hedged drawer with SEEC on.
+		kp, err := hs.dh.GenerateKeypair(hs.keygenRNG())
 		if err != nil {
-			return 0, fmt.Errorf("%w: ephemeral keygen: %v", ErrDH, err)
+			return 0, fmt.Errorf("%w: ephemeral keygen: %w", ErrDH, err)
 		}
 		hs.e = &kp
 	}

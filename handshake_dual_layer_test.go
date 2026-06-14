@@ -383,6 +383,17 @@ func runDualLayerVectorTest(t *testing.T, path string, hybrid bool) {
 	var handshakeHash []byte
 	inTransport := false
 
+	// Fail-closed parsing, mirroring parseVectorFile: a parser that
+	// silently skips malformed lines turns a corrupted vector file into
+	// vacuous pins.
+	mustHex := func(what, hexStr string) []byte {
+		data, err := hex.DecodeString(hexStr)
+		if err != nil {
+			t.Fatalf("%s: %s: invalid hex: %v", path, what, err)
+		}
+		return data
+	}
+
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	headerDone := false
@@ -404,48 +415,80 @@ func runDualLayerVectorTest(t *testing.T, path string, hybrid bool) {
 		if !headerDone {
 			if strings.HasPrefix(line, "prologue_hex:") {
 				hexStr := strings.TrimSpace(strings.TrimPrefix(line, "prologue_hex:"))
-				prologue, _ = hex.DecodeString(hexStr)
+				prologue = mustHex("prologue_hex", hexStr)
 			}
 			continue
 		}
 
 		if inTransport {
-			if strings.HasPrefix(line, "handshake_hash:") {
+			switch {
+			case strings.HasPrefix(line, "handshake_hash:"):
 				hexStr := strings.TrimSpace(strings.TrimPrefix(line, "handshake_hash:"))
-				handshakeHash, _ = hex.DecodeString(hexStr)
-				continue
-			}
-			if strings.HasPrefix(line, "transport[") {
+				handshakeHash = mustHex("handshake_hash", hexStr)
+			case strings.HasPrefix(line, "transport["):
 				parts := strings.SplitN(line, " ", 3)
 				if len(parts) < 3 {
-					continue
+					t.Fatalf("%s: malformed transport line: %q", path, line)
 				}
 				sender := strings.TrimSuffix(parts[1], ":")
-				data, _ := hex.DecodeString(strings.TrimSpace(parts[2]))
-				transportMsgs = append(transportMsgs, transportMsg{sender: sender, data: data})
+				transportMsgs = append(transportMsgs, transportMsg{
+					sender: sender,
+					data:   mustHex(parts[0], strings.TrimSpace(parts[2])),
+				})
+			default:
+				t.Fatalf("%s: unknown transport line: %q", path, line)
 			}
 			continue
 		}
 
 		// Handshake messages
-		if strings.HasPrefix(line, "msg[") {
+		switch {
+		case strings.HasPrefix(line, "msg["):
 			parts := strings.SplitN(line, " ", 3)
 			if len(parts) < 3 {
-				continue
+				t.Fatalf("%s: malformed msg line: %q", path, line)
 			}
 			sender := strings.TrimSuffix(parts[1], ":")
-			data, _ := hex.DecodeString(strings.TrimSpace(parts[2]))
-			msgs = append(msgs, vectorMsg{sender: sender, data: data})
-		} else if strings.HasPrefix(line, "h[") {
+			msgs = append(msgs, vectorMsg{
+				sender: sender,
+				data:   mustHex(parts[0], strings.TrimSpace(parts[2])),
+			})
+		case strings.HasPrefix(line, "h["):
 			parts := strings.SplitN(line, " ", 2)
 			if len(parts) < 2 {
-				continue
+				t.Fatalf("%s: malformed h line: %q", path, line)
 			}
-			hBytes, _ := hex.DecodeString(strings.TrimSpace(parts[1]))
-			if len(msgs) > 0 {
-				msgs[len(msgs)-1].h = hBytes
+			if len(msgs) == 0 {
+				t.Fatalf("%s: h line with no preceding msg: %q", path, line)
 			}
+			if msgs[len(msgs)-1].h != nil {
+				t.Fatalf("%s: duplicate h line for msg[%d]", path, len(msgs)-1)
+			}
+			msgs[len(msgs)-1].h = mustHex(parts[0], strings.TrimSpace(parts[1]))
+		default:
+			t.Fatalf("%s: unknown messages line: %q", path, line)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("%s: scan: %v", path, err)
+	}
+
+	// Shape pins (both dual-layer vector files have this exact shape: 6
+	// handshake messages - 2 outer NN + 4 inner pqXX - each with a hash
+	// pin, a final hash, and 3 transport messages).
+	if len(msgs) != 6 {
+		t.Fatalf("%s: parsed %d handshake messages, want 6", path, len(msgs))
+	}
+	for i := range msgs {
+		if msgs[i].h == nil {
+			t.Fatalf("%s: msg[%d] has no hash pin", path, i)
+		}
+	}
+	if handshakeHash == nil {
+		t.Fatalf("%s: missing final handshake_hash", path)
+	}
+	if len(transportMsgs) != 3 {
+		t.Fatalf("%s: parsed %d transport messages, want 3", path, len(transportMsgs))
 	}
 
 	// Create handshakes with DummyRng

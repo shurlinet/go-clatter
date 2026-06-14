@@ -53,7 +53,67 @@ func NewHybridHandshake(
 		return nil, fmt.Errorf("%w: set clatter.AllowExperimental.Store(true) first", ErrExperimentalNotAllowed)
 	}
 
+	if err := validateSuitePrimitives(suite.Hash, suite.Cipher); err != nil {
+		return nil, err
+	}
+
 	ho := applyOptions(opts)
+
+	// Zero option key clones if construction fails before they are
+	// consumed.
+	consumed := false
+	defer func() {
+		if !consumed {
+			ho.destroyKeyClones()
+		}
+	}()
+
+	// Hybrid does not use the pre-set ephemeral option; zero the unused
+	// clone now.
+	if ho.ephemeralKey != nil {
+		ho.ephemeralKey.Destroy()
+		ho.ephemeralKey = nil
+	}
+
+	// SEEC option validation (nil and typed-nil rejected) plus capability
+	// validation: with SEEC on, both KEMs must support coins-driven
+	// encapsulation, surfaced here rather than mid-handshake.
+	if err := validateSEECOption(&ho); err != nil {
+		return nil, err
+	}
+	if ho.seec != nil {
+		if err := validateSEECKEMCapability(suite.EKEM, "EKEM"); err != nil {
+			return nil, err
+		}
+		if err := validateSEECKEMCapability(suite.SKEM, "SKEM"); err != nil {
+			return nil, err
+		}
+	}
+
+	// Pre-set key lengths must match the suite (DH statics via
+	// WithStaticKey/WithRemoteStatic, KEM statics via the KEM options).
+	dhPubKeyLen := suite.DH.PubKeyLen()
+	skemPubKeyLen := suite.SKEM.PubKeyLen()
+	if ho.staticKey != nil {
+		if err := validateKeyLen("static key public", len(ho.staticKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
+	if ho.remoteStatic != nil {
+		if err := validateKeyLen("remote static public", len(ho.remoteStatic), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
+	if ho.staticKEM != nil {
+		if err := validateKeyLen("static KEM key public", len(ho.staticKEM.Public), skemPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
+	if ho.remoteStaticKEM != nil {
+		if err := validateKeyLen("remote static KEM public", len(ho.remoteStaticKEM), skemPubKeyLen); err != nil {
+			return nil, err
+		}
+	}
 
 	rng := ho.rng
 	if rng == nil {
@@ -70,6 +130,7 @@ func NewHybridHandshake(
 	hs.pattern = pattern
 	hs.initiator = initiator
 	hs.rng = rng
+	hs.seec = ho.seec
 	hs.cipher = suite.Cipher
 	hs.hash = suite.Hash
 	hs.ekem = suite.EKEM
@@ -159,6 +220,7 @@ func NewHybridHandshake(
 	// Set initial status
 	hs.determineInitialStatus()
 
+	consumed = true
 	return hs, nil
 }
 
@@ -679,20 +741,21 @@ func (hs *HybridHandshake) processReadToken(token Token, reader *messageReader) 
 // DH pubkey is written first, then KEM pubkey (matching Rust hybrid.rs order).
 // Sets ownRandApplied after all crypto operations complete.
 func (hs *HybridHandshake) writeTokenE(out []byte) (int, error) {
-	// Generate DH ephemeral if not present
+	// Generate DH ephemeral if not present. keygenRNG returns hs.rng
+	// unchanged with SEEC off, or the SEEC-hedged drawer with SEEC on.
 	if hs.e == nil {
-		kp, err := hs.dh.GenerateKeypair(hs.rng)
+		kp, err := hs.dh.GenerateKeypair(hs.keygenRNG())
 		if err != nil {
-			return 0, fmt.Errorf("%w: DH ephemeral keygen: %v", ErrDH, err)
+			return 0, fmt.Errorf("%w: DH ephemeral keygen: %w", ErrDH, err)
 		}
 		hs.e = &kp
 	}
 
 	// Generate KEM ephemeral if not present
 	if hs.kemE == nil {
-		kp, err := hs.ekem.GenerateKeypair(hs.rng)
+		kp, err := hs.ekem.GenerateKeypair(hs.keygenRNG())
 		if err != nil {
-			return 0, fmt.Errorf("%w: KEM ephemeral keygen: %v", ErrKEM, err)
+			return 0, fmt.Errorf("%w: KEM ephemeral keygen: %w", ErrKEM, err)
 		}
 		hs.kemE = &kp
 	}
@@ -866,9 +929,10 @@ func (hs *HybridHandshake) writeTokenEkem(out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: Ekem requires remote ephemeral KEM key", ErrMissingKey)
 	}
 
-	ct, ss, err := hs.ekem.Encapsulate(hs.kemRE.Public, hs.rng)
+	// SEEC-hedged coins when SEEC is on; the unchanged v0.5.0 path when off.
+	ct, ss, err := hs.encapsulateKEM(hs.ekem, hs.kemRE.Public)
 	if err != nil {
-		return 0, fmt.Errorf("%w: Ekem encapsulate: %v", ErrKEM, err)
+		return 0, fmt.Errorf("%w: Ekem encapsulate: %w", ErrKEM, err)
 	}
 	defer zeroSlice(ss)
 
@@ -906,7 +970,7 @@ func (hs *HybridHandshake) readTokenEkem(reader *messageReader) error {
 
 	ss, err := hs.ekem.Decapsulate(ct, hs.kemE.SecretSlice())
 	if err != nil {
-		return fmt.Errorf("%w: Ekem decapsulate: %v", ErrKEM, err)
+		return fmt.Errorf("%w: Ekem decapsulate: %w", ErrKEM, err)
 	}
 	defer zeroSlice(ss)
 
@@ -928,9 +992,10 @@ func (hs *HybridHandshake) writeTokenSkem(out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: PSK requires own randomness before Skem", ErrPSKInvalid)
 	}
 
-	ct, ss, err := hs.skem.Encapsulate(hs.kemRS.Public, hs.rng)
+	// SEEC-hedged coins when SEEC is on; the unchanged v0.5.0 path when off.
+	ct, ss, err := hs.encapsulateKEM(hs.skem, hs.kemRS.Public)
 	if err != nil {
-		return 0, fmt.Errorf("%w: Skem encapsulate: %v", ErrKEM, err)
+		return 0, fmt.Errorf("%w: Skem encapsulate: %w", ErrKEM, err)
 	}
 	defer zeroSlice(ss)
 
@@ -987,7 +1052,7 @@ func (hs *HybridHandshake) readTokenSkem(reader *messageReader) error {
 	// Decapsulate with DECRYPTED ciphertext
 	ss, err := hs.skem.Decapsulate(ctPlain, hs.kemS.SecretSlice())
 	if err != nil {
-		return fmt.Errorf("%w: Skem decapsulate: %v", ErrKEM, err)
+		return fmt.Errorf("%w: Skem decapsulate: %w", ErrKEM, err)
 	}
 	defer zeroSlice(ss)
 

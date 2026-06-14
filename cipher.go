@@ -236,10 +236,23 @@ func (cs *CipherState) EncryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 	// Copy plaintext to a temporary buffer to avoid aliasing issues during encrypt.
 	plaintext := make([]byte, msgLen)
 	copy(plaintext, inOut[:msgLen])
-	_, err := cs.encrypt(cs.nonce, ad, plaintext, inOut[:outLen])
+	result, err := cs.encrypt(cs.nonce, ad, plaintext, inOut[:outLen])
 	zeroSlice(plaintext)
 	if err != nil {
 		return 0, err
+	}
+	// The in-place contract requires the ciphertext IN inOut. A Cipher
+	// that allocates its own result (contract violation) would otherwise
+	// leave the PLAINTEXT in inOut while this function reports success -
+	// plaintext transmitted as ciphertext. Verify, and copy in if needed.
+	if len(result) != outLen {
+		zeroSlice(result)
+		return 0, fmt.Errorf("%w: cipher returned %d bytes for %d-byte in-place encryption",
+			ErrCipher, len(result), outLen)
+	}
+	if outLen > 0 && &result[0] != &inOut[0] {
+		copy(inOut[:outLen], result)
+		zeroSlice(result)
 	}
 
 	if cs.nonce == math.MaxUint64 {
@@ -277,10 +290,21 @@ func (cs *CipherState) DecryptWithAdInPlace(ad []byte, inOut []byte, msgLen int)
 	ptLen := msgLen - TagLen
 	ciphertext := make([]byte, msgLen)
 	copy(ciphertext, inOut[:msgLen])
-	_, err := cs.decrypt(cs.nonce, ad, ciphertext, inOut[:ptLen])
+	result, err := cs.decrypt(cs.nonce, ad, ciphertext, inOut[:ptLen])
 	zeroSlice(ciphertext)
 	if err != nil {
 		return 0, err
+	}
+	// Mirror of the encrypt-side in-place contract check: the plaintext
+	// must actually be in inOut, not in a cipher-allocated buffer.
+	if len(result) != ptLen {
+		zeroSlice(result)
+		return 0, fmt.Errorf("%w: cipher returned %d bytes for %d-byte in-place decryption",
+			ErrCipher, len(result), ptLen)
+	}
+	if ptLen > 0 && &result[0] != &inOut[0] {
+		copy(inOut[:ptLen], result)
+		zeroSlice(result)
 	}
 
 	if cs.nonce == math.MaxUint64 {

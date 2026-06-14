@@ -93,6 +93,31 @@ type KeyedAEAD interface {
 	Decrypt(nonce uint64, ad, ciphertext, out []byte) ([]byte, error)
 }
 
+// CoinsEncapsulator is an optional interface a KEM may implement to accept
+// externally supplied encapsulation coins (FIPS 203 Encaps with m from the
+// caller; HQC equivalently via its deterministic encapsulation interface).
+// Required for SEEC-hedged encapsulation: a handshake constructed with
+// [WithSEEC] validates at construction that its EKEM and SKEM implement
+// this interface and fails closed otherwise - SEEC never silently
+// downgrades to keygen-only hedging.
+//
+// Return order is ciphertext FIRST, shared secret SECOND - the same order
+// as [KEM.Encapsulate]. Implementations and callers must never swap them:
+// a swapped implementation would transmit the shared secret in plaintext
+// on the wire. (nyquist's KEM interface documented one order and
+// implemented the other; go-clatter pins the order with named returns in
+// both interfaces.)
+type CoinsEncapsulator interface {
+	KEM
+	// EncapsCoinsLen returns the exact encapsulation coin length in bytes.
+	EncapsCoinsLen() int
+	// EncapsulateWithCoins encapsulates to pk using the provided coins.
+	// len(coins) must equal EncapsCoinsLen(); any other length is an
+	// error. The same (pk, coins) pair always produces the same
+	// (ct, ss) - callers own coin freshness.
+	EncapsulateWithCoins(pk, coins []byte) (ct, ss []byte, err error)
+}
+
 // KEM abstracts a Key Encapsulation Mechanism (ML-KEM-768 or ML-KEM-1024).
 type KEM interface {
 	// Name returns the KEM name for protocol string construction.

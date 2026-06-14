@@ -44,10 +44,15 @@ type SEEC interface {
 }
 
 // SEECPurpose domain-separates SEEC output contexts so that identical
-// (secret, r) pairs never produce identical coins across different uses
-// (e.g. a keygen seed and an encapsulation coin of the same width under
-// an rng rollback). This is a deliberate strengthening over the paper
-// and the nyquist reference, which separate nothing.
+// (secret, r) pairs never produce identical coins across DIFFERENT
+// purposes (e.g. a keygen seed and an encapsulation coin of the same
+// width under an rng rollback). This is a deliberate strengthening over
+// the paper and the nyquist reference, which separate nothing. The
+// separation is purpose-level only: two draws with the SAME purpose and
+// the same requested width (e.g. a 32-byte DH seed and a 32-byte KEM
+// seed in one hybrid handshake) produce identical output when r repeats,
+// exactly as raw rng reads would - SEEC hedges coin secrecy, never coin
+// freshness.
 type SEECPurpose uint8
 
 // Defined purposes. The values are opaque pass-through to implementations:
@@ -182,6 +187,37 @@ func NewSEECPRF(h HashFunc, secret []byte) (*SEECPRF, error) {
 // the lock), so a destroyed instance still consumes 32 bytes from rng
 // before returning the error.
 func (s *SEECPRF) GenRand(rng io.Reader, purpose SEECPurpose, n int) ([]byte, error) {
+	info := [2]byte{byte(purpose), byte(n)}
+	return s.genRand(rng, info[:], n)
+}
+
+// genRandChunk is the chunked-draw variant used by the handshake draw
+// helper for requests wider than 255 bytes (custom big-seed KEMs only;
+// every built-in width fits a single GenRand call). The draw's TOTAL
+// width and this chunk's byte OFFSET are bound into the Expand info, so
+// under a repeating or dead rng (same r every call): two chunks of one
+// logical draw can never be byte-identical (offsets differ), and draws
+// of different total widths never share any chunk (totals differ). The
+// chunk length needs no separate binding: it is fully determined by
+// (total, offset) and the fixed 255-byte chunking rule.
+//
+//	info = purpose || uint32(total) || uint32(offset)   (big-endian)
+//
+// Single-call draws (GenRand) keep the frozen 2-byte info layout; the
+// 9-byte chunked layout is reachable only through this method and can
+// never collide with it (different HMAC message lengths).
+func (s *SEECPRF) genRandChunk(rng io.Reader, purpose SEECPurpose, n int, total, offset uint32) ([]byte, error) {
+	info := [9]byte{
+		byte(purpose),
+		byte(total >> 24), byte(total >> 16), byte(total >> 8), byte(total),
+		byte(offset >> 24), byte(offset >> 16), byte(offset >> 8), byte(offset),
+	}
+	return s.genRand(rng, info[:], n)
+}
+
+// genRand is the shared draw path behind GenRand and genRandChunk:
+// fresh r, re-key, Expand with the caller-assembled info.
+func (s *SEECPRF) genRand(rng io.Reader, info []byte, n int) ([]byte, error) {
 	if rng == nil {
 		return nil, fmt.Errorf("%w: nil rng", ErrSEEC)
 	}
@@ -213,8 +249,7 @@ func (s *SEECPRF) GenRand(rng io.Reader, purpose SEECPurpose, n int) ([]byte, er
 	}
 	defer zeroSlice(kr)
 
-	info := [2]byte{byte(purpose), byte(n)}
-	out, err := hkdfExpand(s.h, kr, info[:], n)
+	out, err := hkdfExpand(s.h, kr, info, n)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSEEC, err)
 	}

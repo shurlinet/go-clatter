@@ -640,24 +640,25 @@ func TestNqHandshake_OverheadAccuracy(t *testing.T) {
 // --- Interop vector tests ---
 
 func TestNqHandshake_VectorNN(t *testing.T) {
-	runNqVectorTest(t, "vectors/nq_nn_chacha_sha256.txt")
+	runNqVectorTest(t, "vectors/nq_nn_chacha_sha256.txt", 2)
 }
 
 func TestNqHandshake_VectorXX(t *testing.T) {
-	runNqVectorTest(t, "vectors/nq_xx_chacha_sha256.txt")
+	runNqVectorTest(t, "vectors/nq_xx_chacha_sha256.txt", 3)
 }
 
 func TestNqHandshake_VectorIK(t *testing.T) {
-	runNqVectorTest(t, "vectors/nq_ik_aes_sha512.txt")
+	runNqVectorTest(t, "vectors/nq_ik_aes_sha512.txt", 2)
 }
 
 func TestNqHandshake_VectorNNpsk2(t *testing.T) {
-	runNqVectorTest(t, "vectors/nq_nnpsk2_chacha_sha256.txt")
+	runNqVectorTest(t, "vectors/nq_nnpsk2_chacha_sha256.txt", 2)
 }
 
-func runNqVectorTest(t *testing.T, path string) {
+func runNqVectorTest(t *testing.T, path string, wantMsgs int) {
 	t.Helper()
 	v := parseVectorFile(t, path)
+	assertVectorShape(t, path, v, wantMsgs)
 
 	suite := lookupSuite(t, v)
 	pattern := lookupPattern(t, v.pattern)
@@ -935,6 +936,11 @@ type vectorData struct {
 	messages   []vectorMessage
 	hsHash     []byte
 	transports []vectorTransport
+	// SEEC-on vector files declare the secret + hash used; the SEEC
+	// runner honors these (it does not hardcode them) so editing them in
+	// a vector file changes the handshake and fails the pin loudly.
+	seecSecret []byte
+	seecHash   string
 }
 
 type vectorMessage struct {
@@ -950,6 +956,11 @@ type vectorTransport struct {
 	data   []byte
 }
 
+// parseVectorFile parses a .txt vector file FAIL-CLOSED: every malformed
+// line, undecodable hex value, unknown key, orphaned hash line, or scanner
+// error is fatal. A vector parser that silently skips lines turns a buggy
+// generator's output into vacuous pins that assert less than believed -
+// the exact failure mode this strictness exists to prevent.
 func parseVectorFile(t *testing.T, path string) *vectorData {
 	t.Helper()
 	f, err := os.Open(path)
@@ -958,8 +969,17 @@ func parseVectorFile(t *testing.T, path string) *vectorData {
 	}
 	defer f.Close()
 
+	mustHex := func(key, val string) []byte {
+		data, err := hex.DecodeString(val)
+		if err != nil {
+			t.Fatalf("%s: %s: invalid hex: %v", path, key, err)
+		}
+		return data
+	}
+
 	v := &vectorData{}
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	section := "header"
 
 	for scanner.Scan() {
@@ -968,17 +988,20 @@ func parseVectorFile(t *testing.T, path string) *vectorData {
 			continue
 		}
 		if line == "---" {
-			if section == "header" {
+			switch section {
+			case "header":
 				section = "messages"
-			} else {
+			case "messages":
 				section = "transport"
+			default:
+				t.Fatalf("%s: unexpected third section separator", path)
 			}
 			continue
 		}
 
 		parts := strings.SplitN(line, ": ", 2)
 		if len(parts) != 2 {
-			continue
+			t.Fatalf("%s: malformed line (no 'key: value'): %q", path, line)
 		}
 		key, val := parts[0], parts[1]
 
@@ -992,33 +1015,87 @@ func parseVectorFile(t *testing.T, path string) *vectorData {
 			case "hash":
 				v.hashName = val
 			case "prologue_hex":
-				v.prologue, _ = hex.DecodeString(val)
+				v.prologue = mustHex(key, val)
+			case "seec_secret_hex":
+				v.seecSecret = mustHex(key, val)
+			case "seec_hash":
+				v.seecHash = val
+			case "dh", "kem", "ekem", "skem":
+				// Suite details consumed by the per-family runners.
+			default:
+				t.Fatalf("%s: unknown header key %q", path, key)
 			}
 		case "messages":
-			if strings.HasPrefix(key, "msg[") {
+			switch {
+			case strings.HasPrefix(key, "msg["):
 				idx, sender := parseMsgKey(key)
-				data, _ := hex.DecodeString(val)
-				v.messages = append(v.messages, vectorMessage{index: idx, sender: sender, msgHex: data})
-			} else if strings.HasPrefix(key, "h[") {
+				if sender == "" {
+					t.Fatalf("%s: %s: missing sender", path, key)
+				}
+				v.messages = append(v.messages, vectorMessage{index: idx, sender: sender, msgHex: mustHex(key, val)})
+			case strings.HasPrefix(key, "h["):
 				idx := parseHKey(key)
-				data, _ := hex.DecodeString(val)
+				attached := false
 				for i := range v.messages {
 					if v.messages[i].index == idx {
-						v.messages[i].hashHex = data
+						if v.messages[i].hashHex != nil {
+							t.Fatalf("%s: duplicate h[%d]", path, idx)
+						}
+						v.messages[i].hashHex = mustHex(key, val)
+						attached = true
 					}
 				}
+				if !attached {
+					t.Fatalf("%s: h[%d] has no preceding msg[%d] (h lines must follow their message)", path, idx, idx)
+				}
+			default:
+				t.Fatalf("%s: unknown messages key %q", path, key)
 			}
 		case "transport":
-			if key == "handshake_hash" {
-				v.hsHash, _ = hex.DecodeString(val)
-			} else if strings.HasPrefix(key, "transport[") {
+			switch {
+			case key == "handshake_hash":
+				if v.hsHash != nil {
+					t.Fatalf("%s: duplicate handshake_hash", path)
+				}
+				v.hsHash = mustHex(key, val)
+			case strings.HasPrefix(key, "transport["):
 				idx, sender := parseMsgKey(key)
-				data, _ := hex.DecodeString(val)
-				v.transports = append(v.transports, vectorTransport{index: idx, sender: sender, data: data})
+				if sender == "" {
+					t.Fatalf("%s: %s: missing sender", path, key)
+				}
+				v.transports = append(v.transports, vectorTransport{index: idx, sender: sender, data: mustHex(key, val)})
+			default:
+				t.Fatalf("%s: unknown transport key %q", path, key)
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("%s: scan: %v", path, err)
+	}
 	return v
+}
+
+// assertVectorShape pins the exact shape of a parsed vector file: the
+// message count, a handshake-hash pin on EVERY message, the final
+// handshake hash, and the transport message count. Mirrors the JSON
+// harness's wantCompleted pattern so a drifting generator cannot produce
+// a file that pins less than intended.
+func assertVectorShape(t *testing.T, path string, v *vectorData, wantMsgs int) {
+	t.Helper()
+	if len(v.messages) != wantMsgs {
+		t.Fatalf("%s: parsed %d messages, want %d", path, len(v.messages), wantMsgs)
+	}
+	for _, m := range v.messages {
+		if m.hashHex == nil {
+			t.Fatalf("%s: msg[%d] has no h[%d] hash pin", path, m.index, m.index)
+		}
+	}
+	if v.hsHash == nil {
+		t.Fatalf("%s: missing final handshake_hash", path)
+	}
+	if len(v.transports) != 3 {
+		t.Fatalf("%s: parsed %d transport messages, want 3", path, len(v.transports))
+	}
 }
 
 func parseMsgKey(key string) (int, string) {

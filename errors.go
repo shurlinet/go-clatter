@@ -43,6 +43,9 @@ var (
 	// Key errors
 	ErrInvalidKeyLength = errors.New("clatter: invalid key length")
 
+	// Suite errors
+	ErrInvalidSuite = errors.New("clatter: invalid cipher suite")
+
 	// Experimental gate errors
 	ErrExperimentalNotAllowed = errors.New("clatter: experimental algorithm requires AllowExperimental")
 )
