@@ -23,6 +23,10 @@ type NqHandshake struct {
 
 // NewNqHandshake creates a classical DH-only Noise handshake.
 // Pattern must be PatternTypeDH. Returns error for PQ or Hybrid patterns.
+//
+// NQ provides NO quantum resistance: a future quantum adversary breaks X25519.
+// Use [NewPqHandshake] or [NewHybridHandshake] for forward-secure deployments.
+// NQ remains for classical interoperability and legacy patterns.
 func NewNqHandshake(
 	pattern *HandshakePattern,
 	initiator bool,

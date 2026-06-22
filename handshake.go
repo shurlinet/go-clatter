@@ -656,6 +656,9 @@ func WithRNG(rng RNG) Option {
 //     (KEM-e); Hybrid honors both (DH-e and KEM-e independently).
 //   - Receiving one-way messages draws nothing: SEEC only covers locally
 //     generated coins.
+//   - PSK modifiers: orthogonal. SEEC hedges the e/ekem keygen and the
+//     encapsulation coins; PSK mixing into the chaining key is independent
+//     and unaffected.
 func WithSEEC(s SEEC) Option {
 	return func(o *handshakeOptions) {
 		o.seec = s
