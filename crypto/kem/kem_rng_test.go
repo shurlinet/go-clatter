@@ -11,7 +11,7 @@ import (
 )
 
 // errEntropyHealth simulates an rng that returns full bytes alongside a
-// non-nil error - the io.ReadFull fail-open case (H-11) that must be
+// non-nil error - the io.ReadFull fail-open case that must be
 // rejected fail-closed.
 var errEntropyHealth = errors.New("entropy health failed")
 
@@ -66,7 +66,7 @@ func testKeygenRNGSemantics(t *testing.T, k clatter.KEM, seedLen int) {
 		t.Fatal("chunked rng produced a different key than contiguous rng")
 	}
 
-	// Full read + non-nil error: THE H-11 case - must be rejected.
+	// Full read + non-nil error: the io.ReadFull fail-open case - must be rejected.
 	_, err = k.GenerateKeypair(&fullThenErrRNG{err: errEntropyHealth})
 	if err == nil {
 		t.Fatal("full-read+error keygen must fail closed")

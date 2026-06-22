@@ -10,7 +10,7 @@ import (
 	clatter "github.com/shurlinet/go-clatter"
 )
 
-// Production-entropy freshness tests (H-13).
+// Production-entropy freshness tests.
 //
 // These exist as the ONLY detector for a refactor slip that routes
 // production-mode encapsulation or key generation through fixed or derived

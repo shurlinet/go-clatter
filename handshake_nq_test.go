@@ -1355,3 +1355,94 @@ func TestTransport_AEADTamperRejected(t *testing.T) {
 		t.Fatalf("payload mismatch after recovery: %q", out[:m])
 	}
 }
+
+// TestNqHandshake_DerivedOneWay_EndToEnd proves the FULL wiring of the derived
+// one-way bit: a CUSTOM one-way pattern built via the public NewPattern (which no
+// longer takes a one-way parameter) is reported one-way by the pattern AND by the
+// Handshaker interface, and its TransportState enforces the one-way direction
+// (responder cannot Send, initiator cannot Receive). This closes the
+// derive -> IsOneWay -> transport gating chain for a user-constructed pattern, not
+// only the built-in N/K/X.
+func TestNqHandshake_DerivedOneWay_EndToEnd(t *testing.T) {
+	suite := suiteChachaSha256()
+
+	// A custom one-way pattern (N's structure: -> e, es; responder pre-shares s and
+	// writes nothing). One-way is DERIVED from numResponder == 0, never declared.
+	pat, err := clatter.NewPattern("customOneWay",
+		[][]clatter.Token{{clatter.TokenE, clatter.TokenES}}, nil,
+		nil, []clatter.Token{clatter.TokenS})
+	if err != nil {
+		t.Fatalf("NewPattern(customOneWay): %v", err)
+	}
+	if !pat.IsOneWay() {
+		t.Fatal("custom responder-silent pattern must be derived one-way")
+	}
+
+	rKP, err := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xAAAAAAAA))
+	if err != nil {
+		t.Fatalf("gen responder key: %v", err)
+	}
+
+	i, err := clatter.NewNqHandshake(pat, true, suite, clatter.WithRemoteStatic(rKP.Public))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	defer i.Destroy()
+	r, err := clatter.NewNqHandshake(pat, false, suite, clatter.WithStaticKey(rKP))
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+	defer r.Destroy()
+
+	// The Handshaker interface surfaces the same derived bit.
+	if !i.IsOneWay() || !r.IsOneWay() {
+		t.Fatal("Handshaker.IsOneWay() must report the derived one-way bit")
+	}
+
+	buf := make([]byte, 8192)
+	payloadBuf := make([]byte, 8192)
+	n, err := i.WriteMessage([]byte("one-way"), buf)
+	if err != nil {
+		t.Fatalf("msg0 write: %v", err)
+	}
+	pn, err := r.ReadMessage(buf[:n], payloadBuf)
+	if err != nil {
+		t.Fatalf("msg0 read: %v", err)
+	}
+	if string(payloadBuf[:pn]) != "one-way" {
+		t.Fatalf("handshake payload mismatch: %q", payloadBuf[:pn])
+	}
+
+	tsI, err := i.Finalize()
+	if err != nil {
+		t.Fatalf("initiator Finalize: %v", err)
+	}
+	defer tsI.Destroy()
+	tsR, err := r.Finalize()
+	if err != nil {
+		t.Fatalf("responder Finalize: %v", err)
+	}
+	defer tsR.Destroy()
+
+	// Allowed direction: initiator -> responder.
+	out := make([]byte, 8192)
+	wn, err := tsI.Send([]byte("hello"), out)
+	if err != nil {
+		t.Fatalf("initiator Send (allowed) failed: %v", err)
+	}
+	rn, err := tsR.Receive(out[:wn], payloadBuf)
+	if err != nil {
+		t.Fatalf("responder Receive (allowed) failed: %v", err)
+	}
+	if string(payloadBuf[:rn]) != "hello" {
+		t.Fatalf("transport payload mismatch: %q", payloadBuf[:rn])
+	}
+
+	// Forbidden direction: the derived one-way bit must gate the reverse channel.
+	if _, err := tsR.Send([]byte("nope"), out); !errors.Is(err, clatter.ErrOneWayViolation) {
+		t.Fatalf("responder Send must be ErrOneWayViolation on a derived one-way pattern, got: %v", err)
+	}
+	if _, err := tsI.Receive(out[:48], payloadBuf); !errors.Is(err, clatter.ErrOneWayViolation) {
+		t.Fatalf("initiator Receive must be ErrOneWayViolation on a derived one-way pattern, got: %v", err)
+	}
+}

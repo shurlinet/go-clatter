@@ -8,6 +8,74 @@ import (
 	"testing"
 )
 
+// TestHandshakeInternals_bindOuterTransport verifies bindOuterTransport runs
+// exactly MixHash(domain) then MixKeyAndHash(outerHash) - the same sequence the
+// hybrid dual-layer used via the deleted mixHashIntoInner type-switch. Pins the
+// byte-identity that keeps the hybrid-dual vectors stable.
+func TestHandshakeInternals_bindOuterTransport(t *testing.T) {
+	domain := []byte("clatter.hybrid_dual_layer.outer")
+	outerHash := make([]byte, 32)
+	for i := range outerHash {
+		outerHash[i] = byte(i + 1)
+	}
+
+	viaMethod := &HandshakeInternals{symmetricState: InitializeSymmetric(&testSha256{}, &testCipher{}, "bind_test")}
+	if err := viaMethod.bindOuterTransport(domain, outerHash); err != nil {
+		t.Fatalf("bindOuterTransport: %v", err)
+	}
+
+	viaSequence := &HandshakeInternals{symmetricState: InitializeSymmetric(&testSha256{}, &testCipher{}, "bind_test")}
+	viaSequence.symmetricState.MixHash(domain)
+	if err := viaSequence.symmetricState.MixKeyAndHash(outerHash); err != nil {
+		t.Fatalf("manual MixKeyAndHash: %v", err)
+	}
+
+	if string(viaMethod.symmetricState.GetHandshakeHash()) != string(viaSequence.symmetricState.GetHandshakeHash()) {
+		t.Fatal("bindOuterTransport must be byte-identical to MixHash+MixKeyAndHash")
+	}
+
+	// Destroyed state: returns ErrInvalidState instead of dereferencing nil.
+	destroyed := &HandshakeInternals{}
+	if err := destroyed.bindOuterTransport(domain, outerHash); err != ErrInvalidState {
+		t.Fatalf("bindOuterTransport on nil symmetric state: got %v, want ErrInvalidState", err)
+	}
+}
+
+// TestHybridDualLayer_failInnerBindZeroesOuterTransport verifies the dual-layer
+// bind-failure path destroys the live outer transport keys immediately, rather
+// than leaking them until a later Destroy(). The outer handshake finalizes into
+// outerTransport before the bind is attempted, so on a bind failure those
+// session keys must be zeroed in place (the library's zero-secrets-on-error
+// invariant). The real path is near-unreachable (the construction gate
+// guarantees a bindable inner whose symmetric state is live at the transition),
+// so failInnerBind is exercised directly.
+func TestHybridDualLayer_failInnerBindZeroesOuterTransport(t *testing.T) {
+	cs1, err := NewCipherState(&testCipher{}, make([]byte, KeyLen))
+	if err != nil {
+		t.Fatalf("cs1: %v", err)
+	}
+	cs2, err := NewCipherState(&testCipher{}, make([]byte, KeyLen))
+	if err != nil {
+		t.Fatalf("cs2: %v", err)
+	}
+	ts := newTransportState(cs1, cs2, PatternNN, make([]byte, 32), true, MaxMessageLen)
+
+	hdl := &HybridDualLayerHandshake{}
+	hdl.dl.outerTransport = ts
+
+	_ = hdl.failInnerBind(make([]byte, 32), Sent, ErrInvalidState)
+
+	if !ts.IsDestroyed() {
+		t.Fatal("failInnerBind must destroy the outer transport (live session keys), not leak them until Destroy()")
+	}
+	if hdl.dl.outerTransport != nil {
+		t.Fatal("failInnerBind must nil the outerTransport reference")
+	}
+	if !hdl.dl.finalized {
+		t.Fatal("failInnerBind must finalize the handshake")
+	}
+}
+
 // TestHandshakeInternals_InitialStatus verifies initial status determination.
 func TestHandshakeInternals_InitialStatus(t *testing.T) {
 	h := &HandshakeInternals{

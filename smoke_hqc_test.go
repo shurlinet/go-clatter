@@ -46,17 +46,13 @@ func TestSmokeHqcPqHandshakes(t *testing.T) {
 		bobS, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(20))
 
 		alice, err := clatter.NewPqHandshake(clatter.PatternPqXN, true, suite,
-			clatter.WithStaticKey(aliceS),
-			clatter.WithRemoteStatic(bobS.Public),
-		)
+			singleStaticOpts(clatter.PatternPqXN, true, aliceS, bobS.Public)...)
 		if err != nil {
 			t.Fatalf("%s: alice: %v", label, err)
 		}
 
 		bob, err := clatter.NewPqHandshake(clatter.PatternPqXN, false, suite,
-			clatter.WithStaticKey(bobS),
-			clatter.WithRemoteStatic(aliceS.Public),
-		)
+			singleStaticOpts(clatter.PatternPqXN, false, bobS, aliceS.Public)...)
 		if err != nil {
 			t.Fatalf("%s: bob: %v", label, err)
 		}
@@ -96,16 +92,12 @@ func TestSmokeHqcDualLayer(t *testing.T) {
 	}
 
 	alicePQ, err := clatter.NewPqHandshake(clatter.PatternPqXN, true, pqSuite,
-		clatter.WithStaticKey(alicePqS),
-		clatter.WithRemoteStatic(bobPqS.Public),
-	)
+		singleStaticOpts(clatter.PatternPqXN, true, alicePqS, bobPqS.Public)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	bobPQ, err := clatter.NewPqHandshake(clatter.PatternPqXN, false, pqSuite,
-		clatter.WithStaticKey(bobPqS),
-		clatter.WithRemoteStatic(alicePqS.Public),
-	)
+		singleStaticOpts(clatter.PatternPqXN, false, bobPqS, alicePqS.Public)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,21 +134,13 @@ func TestSmokeHqcHybridHandshake(t *testing.T) {
 	bobKEM, _ := hqc128.GenerateKeypair(clatter.NewDummyRng(60))
 
 	alice, err := clatter.NewHybridHandshake(clatter.PatternHybridXN, true, suite,
-		clatter.WithStaticKey(aliceDH),
-		clatter.WithRemoteStatic(bobDH.Public),
-		clatter.WithStaticKEMKey(aliceKEM),
-		clatter.WithRemoteStaticKEMKey(bobKEM.Public),
-	)
+		hybridStaticOpts(clatter.PatternHybridXN, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	bob, err := clatter.NewHybridHandshake(clatter.PatternHybridXN, false, suite,
-		clatter.WithStaticKey(bobDH),
-		clatter.WithRemoteStatic(aliceDH.Public),
-		clatter.WithStaticKEMKey(bobKEM),
-		clatter.WithRemoteStaticKEMKey(aliceKEM.Public),
-	)
+		hybridStaticOpts(clatter.PatternHybridXN, false, bobDH, aliceDH.Public, bobKEM, aliceKEM.Public)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,17 +169,13 @@ func TestSmokeHqcMixedKEM(t *testing.T) {
 	bobS, _ := hqc128.GenerateKeypair(clatter.NewDummyRng(20))
 
 	alice, err := clatter.NewPqHandshake(clatter.PatternPqXN, true, suite,
-		clatter.WithStaticKey(aliceS),
-		clatter.WithRemoteStatic(bobS.Public),
-	)
+		singleStaticOpts(clatter.PatternPqXN, true, aliceS, bobS.Public)...)
 	if err != nil {
 		t.Fatalf("alice: %v", err)
 	}
 
 	bob, err := clatter.NewPqHandshake(clatter.PatternPqXN, false, suite,
-		clatter.WithStaticKey(bobS),
-		clatter.WithRemoteStatic(aliceS.Public),
-	)
+		singleStaticOpts(clatter.PatternPqXN, false, bobS, aliceS.Public)...)
 	if err != nil {
 		t.Fatalf("bob: %v", err)
 	}

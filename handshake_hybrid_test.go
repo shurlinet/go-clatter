@@ -1,8 +1,10 @@
 package clatter_test
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	clatter "github.com/shurlinet/go-clatter"
@@ -375,14 +377,12 @@ func runHybridVectorTest(t *testing.T, path string, wantMsgs int) {
 		t.Fatalf("gen responder KEM: %v", err)
 	}
 
-	// Rust gen_hybrid() ALWAYS passes all keys (with_s, with_rs, with_s_kem, with_rs_kem).
-	// We mirror this via options so pre-message processing can access KEM keys.
-	iOpts = append(iOpts,
-		clatter.WithStaticKey(iDH), clatter.WithRemoteStatic(rDH.Public),
-		clatter.WithStaticKEMKey(iKEM), clatter.WithRemoteStaticKEMKey(rKEM.Public))
-	rOpts = append(rOpts,
-		clatter.WithStaticKey(rDH), clatter.WithRemoteStatic(iDH.Public),
-		clatter.WithStaticKEMKey(rKEM), clatter.WithRemoteStaticKEMKey(iKEM.Public))
+	// All four keypairs are generated above (keeping the shared-RNG draw order
+	// identical to Rust gen_hybrid). Only the APPLICABLE static options are passed:
+	// a no-op static (a role that transmits none, or a remote static learned
+	// in-band) is now rejected, and dropping it is wire-identical.
+	iOpts = append(iOpts, hybridStaticOpts(pattern, true, iDH, rDH.Public, iKEM, rKEM.Public)...)
+	rOpts = append(rOpts, hybridStaticOpts(pattern, false, rDH, iDH.Public, rKEM, iKEM.Public)...)
 
 	initiator, err := clatter.NewHybridHandshake(pattern, true, suite, iOpts...)
 	if err != nil {
@@ -781,8 +781,292 @@ func TestHybridHandshake_DestroyZerosState(t *testing.T) {
 
 // TestHybridHandshake_IK_AesSha512_RoundTrip exercises the AES-GCM +
 // SHA-512 suite variant end-to-end (the NQ family has the same variant
-// test; hybridSuiteAesSha512 existed for this since Batch 4 but was
+// test; hybridSuiteAesSha512 already existed for this but was
 // never wired).
+// --- WithEphemeralKey + WithEphemeralKEMKey tests ---
+
+// TestHybridHandshake_BothPresetEphemerals_NN verifies both DH-e and KEM-e
+// pre-set produces a working handshake end-to-end.
+func TestHybridHandshake_BothPresetEphemerals_NN(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	dhE, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xA1))
+	kemE, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xA2))
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKey(dhE),
+		clatter.WithEphemeralKEMKey(kemE))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, false, suite)
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "hybridNN_bothPreset")
+}
+
+// TestHybridHandshake_BothSidesPresetEphemerals_NN exercises the RESPONDER's
+// pre-set ephemeral path. Every Hybrid pattern's responder sends Token E
+// ({TokenEkem, TokenE, TokenEE}), so the responder also consumes pre-set DH-e
+// and KEM-e via its writeTokenE. Pre-setting both sides proves that path works
+// end-to-end - the canonical deterministic-test-vector scenario, and the path
+// the initiator-only tests never touch.
+func TestHybridHandshake_BothSidesPresetEphemerals_NN(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	iDHe, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xE1))
+	iKEMe, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xE2))
+	rDHe, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xE3))
+	rKEMe, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xE4))
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKey(iDHe),
+		clatter.WithEphemeralKEMKey(iKEMe))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, false, suite,
+		clatter.WithEphemeralKey(rDHe),
+		clatter.WithEphemeralKEMKey(rKEMe))
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "hybridNN_bothSidesPreset")
+}
+
+// TestHybridHandshake_PresetEphemeralsOnWire_Initiator proves the pre-set
+// ephemerals are ACTUALLY USED (not silently regenerated): the pre-set DH-e and
+// KEM-e public keys must appear verbatim in the initiator's msg0, which
+// writeTokenE produces by copying hs.e.Public and hs.kemE.Public to the wire. A
+// regenerated key would not match. Round-trip tests cannot catch a dropped
+// preset (both peers still agree); this can.
+func TestHybridHandshake_PresetEphemeralsOnWire_Initiator(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	dhE, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xF1))
+	kemE, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xF2))
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKey(dhE),
+		clatter.WithEphemeralKEMKey(kemE))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	buf := make([]byte, 65535)
+	n, err := i.WriteMessage(nil, buf)
+	if err != nil {
+		t.Fatalf("write msg0: %v", err)
+	}
+	msg0 := buf[:n]
+	if !bytes.Contains(msg0, dhE.Public) {
+		t.Fatal("pre-set DH-e public key not on the wire (preset ignored?)")
+	}
+	if !bytes.Contains(msg0, kemE.Public) {
+		t.Fatal("pre-set KEM-e public key not on the wire (preset ignored?)")
+	}
+}
+
+// TestHybridHandshake_PresetEphemeralsOnWire_Responder proves the RESPONDER
+// uses its pre-set ephemerals. Every Hybrid responder sends Token E
+// ({TokenEkem, TokenE, TokenEE}), writing its DH-e and KEM-e public keys into
+// msg1. This is the path no round-trip test could verify - a regenerated
+// responder ephemeral still yields an agreeing handshake.
+func TestHybridHandshake_PresetEphemeralsOnWire_Responder(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	rDhE, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xF3))
+	rKemE, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xF4))
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite)
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, false, suite,
+		clatter.WithEphemeralKey(rDhE),
+		clatter.WithEphemeralKEMKey(rKemE))
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	buf := make([]byte, 65535)
+	pbuf := make([]byte, 65535)
+	n, err := i.WriteMessage(nil, buf) // msg0: initiator ephemeral
+	if err != nil {
+		t.Fatalf("init write: %v", err)
+	}
+	if _, err := r.ReadMessage(buf[:n], pbuf); err != nil {
+		t.Fatalf("resp read: %v", err)
+	}
+	n, err = r.WriteMessage(nil, buf) // msg1: {ekem, e, ee} - responder ephemeral here
+	if err != nil {
+		t.Fatalf("resp write: %v", err)
+	}
+	msg1 := buf[:n]
+	if !bytes.Contains(msg1, rDhE.Public) {
+		t.Fatal("responder pre-set DH-e public key not on the wire (responder preset ignored?)")
+	}
+	if !bytes.Contains(msg1, rKemE.Public) {
+		t.Fatal("responder pre-set KEM-e public key not on the wire (responder preset ignored?)")
+	}
+}
+
+// TestHybridHandshake_MixedPresetOnWire proves the independent-presence routing:
+// pre-setting only one of the two ephemerals puts THAT key on the wire while the
+// other is freshly generated. Catches a routing bug that swaps or drops one field.
+func TestHybridHandshake_MixedPresetOnWire(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	t.Run("DH-only preset", func(t *testing.T) {
+		dhE, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xF5))
+		i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+			clatter.WithEphemeralKey(dhE))
+		if err != nil {
+			t.Fatalf("initiator: %v", err)
+		}
+		buf := make([]byte, 65535)
+		n, err := i.WriteMessage(nil, buf)
+		if err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if !bytes.Contains(buf[:n], dhE.Public) {
+			t.Fatal("pre-set DH-e not on the wire when KEM-e generated")
+		}
+	})
+
+	t.Run("KEM-only preset", func(t *testing.T) {
+		kemE, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xF6))
+		i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+			clatter.WithEphemeralKEMKey(kemE))
+		if err != nil {
+			t.Fatalf("initiator: %v", err)
+		}
+		buf := make([]byte, 65535)
+		n, err := i.WriteMessage(nil, buf)
+		if err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if !bytes.Contains(buf[:n], kemE.Public) {
+			t.Fatal("pre-set KEM-e not on the wire when DH-e generated")
+		}
+	})
+}
+
+// TestHybridHandshake_OnlyDHPreset_NN verifies DH-e pre-set with KEM-e generated.
+func TestHybridHandshake_OnlyDHPreset_NN(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	dhE, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xB1))
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKey(dhE))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, false, suite)
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "hybridNN_dhOnly")
+}
+
+// TestHybridHandshake_OnlyKEMPreset_NN verifies KEM-e pre-set with DH-e generated.
+func TestHybridHandshake_OnlyKEMPreset_NN(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	kemE, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xC1))
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKEMKey(kemE))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, false, suite)
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "hybridNN_kemOnly")
+}
+
+// TestHybridHandshake_EphemeralKey_WrongDHSecretLen rejects wrong DH secret length.
+func TestHybridHandshake_EphemeralKey_WrongDHSecretLen(t *testing.T) {
+	suite := hybridSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, suite.DH.PubKeyLen()), make([]byte, 16))
+	_, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestHybridHandshake_EphemeralKEMKey_WrongSecretLen rejects wrong KEM secret length.
+func TestHybridHandshake_EphemeralKEMKey_WrongSecretLen(t *testing.T) {
+	suite := hybridSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, suite.EKEM.PubKeyLen()), make([]byte, 16))
+	_, err := clatter.NewHybridHandshake(clatter.PatternHybridNN, true, suite,
+		clatter.WithEphemeralKEMKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestHybridHandshake_StaticKey_WrongDHSecretLen rejects wrong DH static secret length.
+func TestHybridHandshake_StaticKey_WrongDHSecretLen(t *testing.T) {
+	suite := hybridSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, suite.DH.PubKeyLen()), make([]byte, 16))
+	_, err := clatter.NewHybridHandshake(clatter.PatternHybridXX, true, suite,
+		clatter.WithStaticKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestHybridHandshake_StaticKEMKey_WrongSecretLen rejects wrong KEM static secret length.
+func TestHybridHandshake_StaticKEMKey_WrongSecretLen(t *testing.T) {
+	suite := hybridSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, suite.SKEM.PubKeyLen()), make([]byte, 16))
+	_, err := clatter.NewHybridHandshake(clatter.PatternHybridXX, true, suite,
+		clatter.WithStaticKEMKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestHybridHandshake_BothPresetEphemerals_NNpsk2 verifies pre-set
+// ephemerals + PSK satisfies the ownRandApplied requirement.
+func TestHybridHandshake_BothPresetEphemerals_NNpsk2(t *testing.T) {
+	suite := hybridSuiteProd()
+
+	dhE, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(0xD1))
+	kemE, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xD2))
+	psk := make([]byte, clatter.PSKLen)
+	psk[0] = 0x42
+
+	i, err := clatter.NewHybridHandshake(clatter.PatternHybridNNpsk2, true, suite,
+		clatter.WithEphemeralKey(dhE),
+		clatter.WithEphemeralKEMKey(kemE))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	if err := i.PushPSK(psk); err != nil {
+		t.Fatalf("initiator PushPSK: %v", err)
+	}
+
+	r, err := clatter.NewHybridHandshake(clatter.PatternHybridNNpsk2, false, suite)
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+	if err := r.PushPSK(psk); err != nil {
+		t.Fatalf("responder PushPSK: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "hybridNNpsk2_bothPreset")
+}
+
 func TestHybridHandshake_IK_AesSha512_RoundTrip(t *testing.T) {
 	suite := hybridSuiteAesSha512()
 	buf := make([]byte, 65535)

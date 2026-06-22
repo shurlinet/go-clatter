@@ -9,7 +9,7 @@ import (
 )
 
 // fullReadErrReader fills the entire request in one call and returns the
-// configured error alongside it: the io.ReadFull fail-open case (H-11).
+// configured error alongside it: the io.ReadFull fail-open case.
 type fullReadErrReader struct{ err error }
 
 func (r *fullReadErrReader) Read(p []byte) (int, error) {
@@ -55,7 +55,7 @@ func TestFill_ChunkedButAliveSucceeds(t *testing.T) {
 }
 
 func TestFill_TruncatedReaderFails(t *testing.T) {
-	// k > 0 bytes available, fewer than requested (C-17: k=0 is plain EOF).
+	// k > 0 bytes available, fewer than requested (k=0 is plain EOF).
 	for _, k := range []int{1, 16, 31} {
 		buf := make([]byte, 32)
 		err := Fill(bytes.NewReader(make([]byte, k)), buf)
@@ -69,7 +69,7 @@ func TestFill_TruncatedReaderFails(t *testing.T) {
 }
 
 func TestFill_FullReadWithErrorFails(t *testing.T) {
-	// THE H-11 case: full bytes + non-nil error. io.ReadFull would
+	// THE full-read-with-error case: full bytes + non-nil error. io.ReadFull would
 	// silently accept this; Fill must reject it.
 	healthErr := errors.New("entropy health failed")
 	buf := make([]byte, 32)

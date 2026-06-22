@@ -53,10 +53,48 @@ func NewNqHandshake(
 		}
 	}()
 
-	// NQ does not use KEM key options; zero the secret-bearing clone now.
+	// NQ is DH-only and cannot honor a KEM ephemeral. Reject WithEphemeralKEMKey
+	// loudly rather than silently degrade to a classical-only handshake (a
+	// silent drop would let a caller believe they had post-quantum ephemeral
+	// protection when they did not). The secret is still zeroed: the deferred
+	// destroyKeyClones runs on this error return. Rust Clatter gets this for
+	// free - its NqHandshake has no KEM-ephemeral parameter, so the same misuse
+	// is a compile error; Go's shared-option bag needs the explicit guard.
+	if ho.ephemeralKEMKey != nil {
+		return nil, fmt.Errorf("%w: NQ is DH-only; WithEphemeralKEMKey is a KEM option (use WithEphemeralKey for the DH ephemeral)", ErrInvalidOption)
+	}
+
+	// NQ is DH-only: the Hybrid-only KEM-static options have no NQ slot and are
+	// rejected loudly so a misconfiguration cannot be silently dropped (a silent
+	// drop would let a caller believe a static was set when it was not). NQ sets
+	// its static via WithStaticKey / WithRemoteStatic. The secret-bearing
+	// staticKEM clone is zeroed by the deferred destroyKeyClones on return.
 	if ho.staticKEM != nil {
-		ho.staticKEM.Destroy()
-		ho.staticKEM = nil
+		return nil, fmt.Errorf("%w: WithStaticKEMKey is Hybrid-only; NQ sets its static via WithStaticKey", ErrInvalidOption)
+	}
+	if ho.remoteStaticKEM != nil {
+		return nil, fmt.Errorf("%w: WithRemoteStaticKEMKey is Hybrid-only; NQ sets its remote static via WithRemoteStatic", ErrInvalidOption)
+	}
+
+	// A pre-set DH ephemeral (WithEphemeralKey -> hs.e) is only consumed by a
+	// party that emits Token::E. A one-way pattern's responder (N/K/X) writes no
+	// messages and emits no Token::E, so a responder preset there would be a
+	// silent no-op. Reject it loudly. Pattern- and role-accurate (an E-emitting
+	// party - every interactive role, every one-way initiator - is unaffected).
+	if ho.ephemeralKey != nil && !pattern.sendsLocalEphemeral(initiator) {
+		return nil, errEphemeralNoOp("WithEphemeralKey", pattern.Name())
+	}
+
+	// A static this role never transmits (no Token::S it writes, no own
+	// pre-message static) or a remote static the peer never pre-shares is a
+	// silent no-op: reject it loudly rather than let a caller believe an identity
+	// was set when it was dropped. usesLocalStatic/usesRemoteStatic are exact
+	// because validateStaticAvailableBeforeUse already ran in NewPattern.
+	if ho.staticKey != nil && !pattern.usesLocalStatic(initiator) {
+		return nil, errStaticNoOp("WithStaticKey", pattern.Name())
+	}
+	if ho.remoteStatic != nil && !pattern.usesRemoteStatic(initiator) {
+		return nil, errStaticNoOp("WithRemoteStatic", pattern.Name())
 	}
 
 	// SEEC option validation (nil and typed-nil rejected). NQ is DH-only:
@@ -68,13 +106,26 @@ func NewNqHandshake(
 	// Pre-set key lengths must match the suite (silent wire truncation
 	// otherwise).
 	dhPubKeyLen := suite.DH.PubKeyLen()
+	dhSecKeyLen := suite.DH.SecretKeyLen()
 	if ho.staticKey != nil {
 		if err := validateKeyLen("static key public", len(ho.staticKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyLen("static key secret", len(ho.staticKey.SecretSlice()), dhSecKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyPairConsistency(suite.DH, ho.staticKey, ErrDH, "static"); err != nil {
 			return nil, err
 		}
 	}
 	if ho.ephemeralKey != nil {
 		if err := validateKeyLen("ephemeral key public", len(ho.ephemeralKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyLen("ephemeral key secret", len(ho.ephemeralKey.SecretSlice()), dhSecKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyPairConsistency(suite.DH, ho.ephemeralKey, ErrDH, "ephemeral"); err != nil {
 			return nil, err
 		}
 	}
@@ -155,6 +206,11 @@ func NewNqHandshake(
 			}
 			return 0
 		}); err != nil {
+			// Zero the partially-built handshake state on failure, matching
+			// the processPreMessages path below (consistent fail-closed
+			// cleanup; the deferred destroyKeyClones additionally zeros the
+			// option clones).
+			hs.Destroy()
 			return nil, err
 		}
 	}

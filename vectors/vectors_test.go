@@ -232,7 +232,12 @@ func verifyVector(t *testing.T, v *vector) bool {
 		clatter.WithPrologue(v.RespPrologue),
 	}
 
-	if v.RespEphemeral != nil {
+	// One-way patterns (N/K/X) have no responder messages, so the responder
+	// emits no Token::E and never uses an ephemeral. Some vector sets (snow)
+	// over-provision a responder ephemeral anyway; go-clatter now rejects that
+	// unused option, and skipping it is wire-identical (the responder
+	// ephemeral never affects a one-way transcript).
+	if v.RespEphemeral != nil && !pattern.IsOneWay() {
 		bobEph, err := makeKeyPairFromSecret(x, *v.RespEphemeral)
 		if err != nil {
 			t.Fatalf("%s: bob ephemeral: %v", v.ProtocolName, err)

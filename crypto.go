@@ -22,6 +22,8 @@ type DH interface {
 	DH(kp KeyPair, pubkey []byte) ([]byte, error)
 	// PubKeyLen returns the public key length in bytes.
 	PubKeyLen() int
+	// SecretKeyLen returns the secret key length in bytes.
+	SecretKeyLen() int
 }
 
 // Cipher abstracts an AEAD cipher (ChaCha20Poly1305 or AES-256-GCM).
@@ -143,4 +145,16 @@ type KEM interface {
 	CiphertextLen() int
 	// SharedSecretLen returns the shared secret length (always 32).
 	SharedSecretLen() int
+	// ValidatePublicKey reports whether pk is a well-formed encapsulation key
+	// of this KEM, to the extent the KEM supports such a check: ML-KEM applies
+	// the FIPS 203 length + modulus/encoding check; HQC checks length only
+	// (go-hqc performs no structural validation beyond length, so any
+	// right-length byte string is accepted - this upgrades automatically if
+	// go-hqc adds a structural check). It performs NO randomness draw and has
+	// no side effects, so it is safe to call at construction without
+	// perturbing the handshake transcript. Returns ErrKEMInvalidKey on a
+	// malformed key. Handshakes call it before encapsulating to a remote
+	// encapsulation key (FIPS 203 Section 7.2) so a malformed key fails at the
+	// point it is supplied or received, not mid-handshake.
+	ValidatePublicKey(pk []byte) error
 }

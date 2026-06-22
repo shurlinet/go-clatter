@@ -12,6 +12,9 @@ import (
 // X25519 implements the X25519 DH algorithm.
 type X25519 struct{}
 
+// Compile-time interface compliance check.
+var _ clatter.DH = (*X25519)(nil)
+
 // NewX25519 returns an X25519 DH instance.
 func NewX25519() *X25519 { return &X25519{} }
 
@@ -20,6 +23,9 @@ func (x *X25519) Name() string { return "25519" }
 
 // PubKeyLen returns the public key length in bytes (32).
 func (x *X25519) PubKeyLen() int { return 32 }
+
+// SecretKeyLen returns the secret key length in bytes (32).
+func (x *X25519) SecretKeyLen() int { return 32 }
 
 // GenerateKeypair reads 32 bytes from rng as a private key scalar.
 // Uses ecdh.X25519().NewPrivateKey (GenerateKey ignores rand in Go 1.26).

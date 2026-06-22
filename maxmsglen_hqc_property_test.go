@@ -258,8 +258,7 @@ func TestPropertyMaxMsgLenHqc(t *testing.T) {
 				aliceS, _ := k.GenerateKeypair(crand.Reader)
 				bobS, _ := k.GenerateKeypair(crand.Reader)
 				_, err := clatter.NewPqHandshake(p, true, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+					append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("PQ initiator at maxOH-1: expected ErrInvalidPattern, got %v", err)
 				}
@@ -270,9 +269,7 @@ func TestPropertyMaxMsgLenHqc(t *testing.T) {
 				aliceKEM, _ := k.GenerateKeypair(crand.Reader)
 				bobKEM, _ := k.GenerateKeypair(crand.Reader)
 				_, err := clatter.NewHybridHandshake(p, true, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(aliceDH), clatter.WithRemoteStatic(bobDH.Public),
-					clatter.WithStaticKEMKey(aliceKEM), clatter.WithRemoteStaticKEMKey(bobKEM.Public))
+					append(hybridStaticOpts(p, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("Hybrid initiator at maxOH-1: expected ErrInvalidPattern, got %v", err)
 				}
@@ -296,14 +293,12 @@ func constructHqcPair(t *testing.T, p *clatter.HandshakePattern, maxMsgLen int,
 		aliceS, _ := k.GenerateKeypair(crand.Reader)
 		bobS, _ := k.GenerateKeypair(crand.Reader)
 		alice, err := clatter.NewPqHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+			append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("PQ initiator construct: %v", err)
 		}
 		bob, err := clatter.NewPqHandshake(p, false, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+			append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("PQ responder construct: %v", err)
 		}
@@ -316,16 +311,12 @@ func constructHqcPair(t *testing.T, p *clatter.HandshakePattern, maxMsgLen int,
 		aliceKEM, _ := k.GenerateKeypair(crand.Reader)
 		bobKEM, _ := k.GenerateKeypair(crand.Reader)
 		alice, err := clatter.NewHybridHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceDH), clatter.WithRemoteStatic(bobDH.Public),
-			clatter.WithStaticKEMKey(aliceKEM), clatter.WithRemoteStaticKEMKey(bobKEM.Public))
+			append(hybridStaticOpts(p, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("Hybrid initiator construct: %v", err)
 		}
 		bob, err := clatter.NewHybridHandshake(p, false, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(bobDH), clatter.WithRemoteStatic(aliceDH.Public),
-			clatter.WithStaticKEMKey(bobKEM), clatter.WithRemoteStaticKEMKey(aliceKEM.Public))
+			append(hybridStaticOpts(p, false, bobDH, aliceDH.Public, bobKEM, aliceKEM.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("Hybrid responder construct: %v", err)
 		}

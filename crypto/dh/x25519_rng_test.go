@@ -13,7 +13,7 @@ import (
 var errEntropyHealth = errors.New("entropy health failed")
 
 // fullThenErrRNG fills the entire request in one call and returns the
-// configured error with it - the io.ReadFull fail-open case (H-11).
+// configured error with it - the io.ReadFull fail-open case.
 type fullThenErrRNG struct{ err error }
 
 func (r *fullThenErrRNG) Read(p []byte) (int, error) {
@@ -58,7 +58,7 @@ func TestX25519_KeygenRNGSemantics(t *testing.T) {
 		t.Fatal("chunked rng produced a different key than contiguous rng")
 	}
 
-	// Full read + non-nil error: THE H-11 case - must be rejected.
+	// Full read + non-nil error: the io.ReadFull fail-open case - must be rejected.
 	_, err = x.GenerateKeypair(&fullThenErrRNG{err: errEntropyHealth})
 	if err == nil {
 		t.Fatal("full-read+error keygen must fail closed")

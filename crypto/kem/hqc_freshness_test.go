@@ -8,7 +8,7 @@ import (
 	clatter "github.com/shurlinet/go-clatter"
 )
 
-// HQC production-entropy freshness tests (H-13). Same rationale as the
+// HQC production-entropy freshness tests. Same rationale as the
 // ML-KEM freshness tests in kem_freshness_test.go.
 //
 // NO t.Parallel() in any HQC test (AllowExperimental is a global atomic).

@@ -354,7 +354,7 @@ func TestSEECPRF_PinnedRegressionVectors(t *testing.T) {
 	}
 }
 
-// --- SEEC-29 corrected property set ---
+// --- corrected property set ---
 
 func TestSEECPRF_DeterministicInSecretAndR(t *testing.T) {
 	r := bytes.Repeat([]byte{0x33}, 32)
@@ -408,7 +408,7 @@ func TestSEECPRF_PurposeSeparation(t *testing.T) {
 }
 
 func TestSEECPRF_PurposeOpaquePassThrough(t *testing.T) {
-	// Purpose is not validated (D-1): undefined values are accepted and
+	// Purpose is not validated: undefined values are accepted and
 	// domain-separate like any other.
 	r := bytes.Repeat([]byte{0x66}, 32)
 	s := mustSEECPRF(t, &testSha256{})
@@ -453,7 +453,7 @@ func TestSEECPRF_ConstantRngRepeatsOutput(t *testing.T) {
 }
 
 func TestSEECPRF_FreshRPerCall(t *testing.T) {
-	// SEEC-28: every call draws fresh r. Under an advancing deterministic
+	// Every call draws fresh r. Under an advancing deterministic
 	// rng, consecutive same-width calls must differ.
 	s := mustSEECPRF(t, &testSha256{})
 	rng := NewDummyRng(0xdeadbeef)
@@ -465,7 +465,7 @@ func TestSEECPRF_FreshRPerCall(t *testing.T) {
 }
 
 func TestSEECPRF_DrawWidthIs32PerCall(t *testing.T) {
-	// SEEC-26: GenRand reads exactly 32 bytes of r per call regardless of n.
+	// GenRand reads exactly 32 bytes of r per call regardless of n.
 	s := mustSEECPRF(t, &testSha256{})
 	for _, n := range []int{1, 32, 255} {
 		c := &countingRNG{inner: NewDummyRng(1)}
@@ -555,7 +555,7 @@ func TestSEECPRF_NilRng(t *testing.T) {
 }
 
 func TestSEECPRF_DestroyDualSentinel(t *testing.T) {
-	// H-7: post-Destroy GenRand wraps BOTH ErrDestroyed and ErrSEEC.
+	// post-Destroy GenRand wraps BOTH ErrDestroyed and ErrSEEC.
 	s := mustSEECPRF(t, &testSha256{})
 	s.Destroy()
 
@@ -631,7 +631,7 @@ func TestSEECPRF_ChunkedRngSucceeds(t *testing.T) {
 }
 
 func TestSEECPRF_FullReadWithErrorFails(t *testing.T) {
-	// THE H-11 case at the SEEC layer.
+	// THE full-read-with-error case at the SEEC layer.
 	healthErr := errors.New("entropy health failed")
 	s := mustSEECPRF(t, &testSha256{})
 	_, err := s.GenRand(&fullThenErrReader{err: healthErr}, SEECKeygen, 32)
@@ -707,8 +707,8 @@ func (t *truncatingHMAC) Write(p []byte) (int, error) { return t.inner.Write(p) 
 func (t *truncatingHMAC) Sum() []byte                 { return t.inner.Sum()[:16] }
 
 // badGeometryHash declares HashLen > BlockLen: its prk could never be
-// used as an HMAC re-key. Must be rejected at construction (SEEC-16:
-// config errors surface at construction, not on the first handshake draw).
+// used as an HMAC re-key. Must be rejected at construction (config
+// errors surface at construction, not on the first handshake draw).
 type badGeometryHash struct{ testSha256 }
 
 func (b *badGeometryHash) HashLen() int { return 65 }
@@ -727,7 +727,7 @@ func TestNewSEECPRF_BadGeometryRejected(t *testing.T) {
 // 100-byte HMAC output, so the prk-length check passes (100 == 100) and
 // ONLY the geometry guard can reject it. Without that guard the instance
 // would construct and then fail on the first GenRand re-key (a 100-byte
-// prk is too long to be an HMAC key) - the exact SEEC-16 mid-handshake
+// prk is too long to be an HMAC key) - the exact mid-handshake
 // trap the construction-time guard exists to prevent.
 type bigConsistentHash struct{}
 
@@ -909,7 +909,7 @@ func TestSEECPRF_ConcurrentGenRand(t *testing.T) {
 }
 
 func TestSEECPRF_DestroyConcurrentWithGenRand(t *testing.T) {
-	// C-1 + R10 corrected assertion: under -race this must be race-clean,
+	// corrected assertion: under -race this must be race-clean,
 	// and every result is valid (expected) coins XOR an ErrDestroyed-
 	// wrapped error. An in-flight call that passed the destroyed check
 	// legitimately COMPLETES (Destroy waits on the read locks); torn

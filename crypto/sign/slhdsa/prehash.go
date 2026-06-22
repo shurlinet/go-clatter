@@ -8,8 +8,6 @@ import (
 
 	"golang.org/x/crypto/sha3"
 
-	crypto_rand "crypto/rand"
-
 	"github.com/shurlinet/go-clatter/crypto/sign/slhdsa/internal"
 	"github.com/shurlinet/go-clatter/internal/entropy"
 )
@@ -160,22 +158,48 @@ func computePreHash(hf HashFunc, msg []byte) []byte {
 	}
 }
 
+// validPreHashFunc reports whether hf is a supported pre-hash function. Defined
+// via preHashOutputLen so validity tracks a real per-hash property (a defined
+// output length) instead of a fragile enum-contiguity range check.
 func validPreHashFunc(hf HashFunc) bool {
-	return hf >= HashSHA2_224 && hf <= HashSHAKE256
+	return preHashOutputLen(hf) != 0
 }
 
-// makeMPrimePreHash constructs M' for Hash-SLH-DSA (FIPS 205 Algorithm 25).
-// M' = [0x01 | ctxLen | ctx | OID | PH(M)]
-func makeMPrimePreHash(msg []byte, hf HashFunc, ctx string) []byte {
+// preHashOutputLen returns the fixed PH(M) length in bytes for hf, per
+// FIPS 205 Table 2 / Section 9.2 (the XOFs are fixed: SHAKE-128 -> 32,
+// SHAKE-256 -> 64). Returns 0 for an invalid hash function.
+func preHashOutputLen(hf HashFunc) int {
+	switch hf {
+	case HashSHA2_224, HashSHA2_512224, HashSHA3_224:
+		return 28
+	case HashSHA2_256, HashSHA2_512256, HashSHA3_256, HashSHAKE128:
+		return 32
+	case HashSHA2_384, HashSHA3_384:
+		return 48
+	case HashSHA2_512, HashSHA3_512, HashSHAKE256:
+		return 64
+	default:
+		return 0
+	}
+}
+
+// assembleMPrimePreHash builds M' for Hash-SLH-DSA from an ALREADY-computed
+// pre-hash phm: M' = [0x01 | ctxLen | ctx | OID | phm] (FIPS 205 Algorithm 25).
+func assembleMPrimePreHash(phm []byte, hf HashFunc, ctx string) []byte {
 	oid := preHashOID(hf)
-	phm := computePreHash(hf, msg)
 	mp := make([]byte, 0, 2+len(ctx)+len(oid)+len(phm))
-	mp = append(mp, 0x01)
+	mp = append(mp, mPrimePreHashDomain)
 	mp = append(mp, byte(len(ctx)))
 	mp = append(mp, []byte(ctx)...)
 	mp = append(mp, oid...)
 	mp = append(mp, phm...)
 	return mp
+}
+
+// makeMPrimePreHash constructs M' for Hash-SLH-DSA over the FULL message msg
+// (it computes PH(M) internally). M' = [0x01 | ctxLen | ctx | OID | PH(M)].
+func makeMPrimePreHash(msg []byte, hf HashFunc, ctx string) []byte {
+	return assembleMPrimePreHash(computePreHash(hf, msg), hf, ctx)
 }
 
 // SignPreHash signs msg using pre-hash mode with the specified hash function
@@ -188,30 +212,77 @@ func (k *PrivateKey) SignPreHash(msg []byte, hashFunc HashFunc) ([]byte, error) 
 }
 
 // SignPreHashWithContext signs msg using pre-hash mode with context.
+// msg is the FULL message; the wrapper computes PH(M) internally.
 func (k *PrivateKey) SignPreHashWithContext(msg []byte, hashFunc HashFunc, ctx string) ([]byte, error) {
+	return k.signPreHashRand(msg, hashFunc, ctx, nil)
+}
+
+// preHashGuard runs the shared pre-hash precedence checks and returns the first
+// failing sentinel (or nil). Order is security-pinned by TestCryptoSignerError-
+// Precedence: destroyed > context-too-long > BLAKE3-unsupported > invalid-hash-
+// func. Single source of truth for both pre-hash entry points (full-message and
+// digest-as-PH) so the ladder cannot drift between them. Caller MUST hold
+// k.mu.RLock and have verified k != nil.
+func (k *PrivateKey) preHashGuard(hashFunc HashFunc, ctx string) error {
+	if k.destroyed {
+		return ErrDestroyed
+	}
+	if len(ctx) > 255 {
+		return ErrContextTooLong
+	}
+	if k.paramSet.IsBLAKE3() {
+		return ErrPreHashNotSupported
+	}
+	if !validPreHashFunc(hashFunc) {
+		return ErrInvalidHashFunc
+	}
+	return nil
+}
+
+// signPreHashRand signs the FULL message msg in pre-hash mode (it computes
+// PH(M) internally). rand selects the addrnd source: nil => crypto/rand.
+func (k *PrivateKey) signPreHashRand(msg []byte, hashFunc HashFunc, ctx string, rand io.Reader) ([]byte, error) {
 	if k == nil {
 		return nil, ErrDestroyed
 	}
 	k.mu.RLock()
 	defer k.mu.RUnlock()
-	if k.destroyed {
-		return nil, ErrDestroyed
-	}
-	if len(ctx) > 255 {
-		return nil, ErrContextTooLong
-	}
-	if k.paramSet.IsBLAKE3() {
-		return nil, ErrPreHashNotSupported
-	}
-	if !validPreHashFunc(hashFunc) {
-		return nil, ErrInvalidHashFunc
+	if err := k.preHashGuard(hashFunc, ctx); err != nil {
+		return nil, err
 	}
 
 	mprime := makeMPrimePreHash(normalizeMsg(msg), hashFunc, ctx)
+	return k.signMPrime(mprime, rand)
+}
+
+// signPreHashDigestRand signs a PRE-COMPUTED pre-hash digest: digest IS PH(M)
+// (the standard crypto.Signer pre-hash contract). M' is assembled directly with
+// no re-hashing. The digest MUST be exactly preHashOutputLen(hashFunc) bytes.
+// rand selects the addrnd source: nil => crypto/rand.
+func (k *PrivateKey) signPreHashDigestRand(digest []byte, hashFunc HashFunc, ctx string, rand io.Reader) ([]byte, error) {
+	if k == nil {
+		return nil, ErrDestroyed
+	}
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	if err := k.preHashGuard(hashFunc, ctx); err != nil {
+		return nil, err
+	}
+	if len(digest) != preHashOutputLen(hashFunc) {
+		return nil, ErrInvalidDigestLength
+	}
+
+	mprime := assembleMPrimePreHash(digest, hashFunc, ctx)
+	return k.signMPrime(mprime, rand)
+}
+
+// signMPrime draws the per-signature randomizer from rand (nil => crypto/rand,
+// via randOrDefault) using the fail-closed entropy.Fill, then runs the engine.
+// Caller MUST hold k.mu.RLock and have verified k is not destroyed.
+func (k *PrivateKey) signMPrime(mprime []byte, rand io.Reader) ([]byte, error) {
 	n := int(k.params.N)
 	addrnd := make([]byte, n)
-	// entropy.Fill for fail-closed reads (see slhdsa.go GenerateKey).
-	if err := entropy.Fill(crypto_rand.Reader, addrnd); err != nil {
+	if err := entropy.Fill(randOrDefault(rand), addrnd); err != nil {
 		return nil, fmt.Errorf("slhdsa: generate addrnd: %w", err)
 	}
 	sig := internal.SLHSignInternal(k.params, mprime, k.internalKey, addrnd)

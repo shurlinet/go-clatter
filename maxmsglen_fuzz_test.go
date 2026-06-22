@@ -81,14 +81,12 @@ func fuzzPattern(t *testing.T, maxMsgLen int, p *clatter.HandshakePattern,
 		bobS, _ := x.GenerateKeypair(crand.Reader)
 		var a *clatter.NqHandshake
 		a, err = clatter.NewNqHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+			append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err == nil {
 			alice = a
 			var b *clatter.NqHandshake
 			b, err = clatter.NewNqHandshake(p, false, s,
-				clatter.WithMaxMessageLen(maxMsgLen),
-				clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+				append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 			if err != nil {
 				a.Destroy()
 				// If initiator succeeds but responder fails, that's a bug
@@ -104,14 +102,12 @@ func fuzzPattern(t *testing.T, maxMsgLen int, p *clatter.HandshakePattern,
 		bobS, _ := k.GenerateKeypair(crand.Reader)
 		var a *clatter.PqHandshake
 		a, err = clatter.NewPqHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+			append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err == nil {
 			alice = a
 			var b *clatter.PqHandshake
 			b, err = clatter.NewPqHandshake(p, false, s,
-				clatter.WithMaxMessageLen(maxMsgLen),
-				clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+				append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 			if err != nil {
 				a.Destroy()
 				t.Fatalf("%s: initiator accepted maxMsgLen=%d but responder rejected: %v",

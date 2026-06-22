@@ -138,6 +138,17 @@ func (k *MlKem768) encapsWithCoins(pk, coins []byte) (ct, ss []byte, err error) 
 	return ciphertext, sharedKey, nil
 }
 
+// ValidatePublicKey reports whether pk is a well-formed ML-KEM-768
+// encapsulation key, running the FIPS 203 length + modulus/encoding check via
+// crypto/mlkem.NewEncapsulationKey768 (the same parse Encapsulate performs).
+// No rng, no side effects. Returns ErrKEMInvalidKey on a malformed key.
+func (k *MlKem768) ValidatePublicKey(pk []byte) error {
+	if _, err := mlkem.NewEncapsulationKey768(pk); err != nil {
+		return fmt.Errorf("%w: %v", clatter.ErrKEMInvalidKey, err)
+	}
+	return nil
+}
+
 // Decapsulate recovers the shared secret from ciphertext and secret key seed.
 func (k *MlKem768) Decapsulate(ct, sk []byte) ([]byte, error) {
 	if len(sk) != 64 {

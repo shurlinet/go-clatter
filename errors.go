@@ -43,6 +43,9 @@ var (
 	// Key errors
 	ErrInvalidKeyLength = errors.New("clatter: invalid key length")
 
+	// Option errors
+	ErrInvalidOption = errors.New("clatter: option not valid for this handshake family")
+
 	// Suite errors
 	ErrInvalidSuite = errors.New("clatter: invalid cipher suite")
 

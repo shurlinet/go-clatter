@@ -215,7 +215,7 @@ func TestPreMessageTokens(t *testing.T) {
 func TestInvalidPattern_TooManyMessages(t *testing.T) {
 	_, err := NewPattern("bad",
 		[][]Token{{TokenE}, {TokenE}, {TokenE}, {TokenE}, {TokenE}, {TokenE}},
-		nil, nil, nil, false)
+		nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for 6 initiator messages")
 	}
@@ -225,7 +225,7 @@ func TestInvalidPattern_TooManyMessages(t *testing.T) {
 func TestInvalidPattern_TooManyTokens(t *testing.T) {
 	_, err := NewPattern("bad",
 		[][]Token{{TokenE, TokenE, TokenE, TokenE, TokenE, TokenE, TokenE, TokenE, TokenE, TokenE, TokenE}},
-		nil, nil, nil, false)
+		nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for 11 tokens in one message")
 	}
@@ -236,7 +236,7 @@ func TestInvalidPattern_PSKMidMessage(t *testing.T) {
 	_, err := NewPattern("bad",
 		[][]Token{{TokenE, TokenPsk, TokenES}},
 		[][]Token{{TokenE, TokenEE}},
-		nil, nil, false)
+		nil, nil)
 	if err == nil {
 		t.Fatal("expected error for PSK in middle of message")
 	}
@@ -246,20 +246,28 @@ func TestInvalidPattern_PSKMidMessage(t *testing.T) {
 func TestInvalidPattern_EkemAfterSkem(t *testing.T) {
 	_, err := NewPattern("bad",
 		[][]Token{{TokenE, TokenSkem, TokenEkem}},
-		nil, nil, nil, false)
+		nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for Ekem after Skem")
 	}
 }
 
-// TestInvalidPattern_SkemAlone verifies Skem alone in a message is valid in PQ patterns.
-// PQ patterns have Skem without prior E/S in the same message (key comes from prior message).
-func TestInvalidPattern_SkemAlone(t *testing.T) {
-	_, err := NewPattern("pqTest",
+// TestNewPattern_SkemAloneIsValidOneWay verifies that a lone Skem message is a
+// VALID PQ pattern, and - since its responder writes no message - that it is
+// correctly derived as one-way. The initiator encapsulates to the responder's
+// pre-shared static (pre-message S); without that pre-share the static-precedence
+// validator would reject the encapsulation-to-an-untransmitted-static, a separate
+// (correct) rule. This shape is the historical mislabel site: it used to be
+// constructed with an explicit oneWay=false, which the derived bit now corrects.
+func TestNewPattern_SkemAloneIsValidOneWay(t *testing.T) {
+	p, err := NewPattern("pqTest",
 		[][]Token{{TokenSkem}},
-		nil, nil, nil, false)
+		nil, nil, []Token{TokenS})
 	if err != nil {
 		t.Fatalf("Skem alone in a message should be valid for PQ patterns: %v", err)
+	}
+	if !p.IsOneWay() {
+		t.Error("a responder-silent pattern must derive IsOneWay()==true")
 	}
 }
 

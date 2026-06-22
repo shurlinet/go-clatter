@@ -128,10 +128,10 @@ func completeAndVerifyTransport(t *testing.T, a, b clatter.Handshaker) {
 	}
 }
 
-// --- v0.5.0 bit-identity pins (C-10i/C-10ii/C-17) ---
+// --- v0.5.0 bit-identity pins (rng-draw widths, message lengths/hashes, final handshake hash) ---
 
 // The expected values below were generated from the v0.5.0 TAG CHECKOUT
-// (git worktree at addfac1) BEFORE any Batch 2 edit existed, so they
+// (an isolated worktree) BEFORE any SEEC-wiring edit existed, so they
 // cannot be circular. They pin, for one handshake per family with SEEC
 // ABSENT: the exact rng draw-width sequence (catches accidental rng
 // wrapping that transcript pins structurally cannot), every message
@@ -317,7 +317,7 @@ func TestSEEC_OnChangesCoins(t *testing.T) {
 	}
 }
 
-// --- SEEC-on <-> SEEC-off interop (D-6, SEEC-27 transcript invisibility) ---
+// --- SEEC-on <-> SEEC-off interop (transcript invisibility) ---
 
 // TestSEEC_InteropWithNonSEECPeer proves SEEC is fully hidden from the
 // peer: a SEEC-enabled party completes a production pqXX handshake with a
@@ -414,6 +414,7 @@ func (p plainKEM) Encapsulate(pk []byte, rng clatter.RNG) (ct, ss []byte, err er
 	return p.inner.Encapsulate(pk, rng)
 }
 func (p plainKEM) Decapsulate(ct, sk []byte) ([]byte, error) { return p.inner.Decapsulate(ct, sk) }
+func (p plainKEM) ValidatePublicKey(pk []byte) error         { return p.inner.ValidatePublicKey(pk) }
 func (p plainKEM) PubKeyLen() int                            { return p.inner.PubKeyLen() }
 func (p plainKEM) SecretKeyLen() int                         { return p.inner.SecretKeyLen() }
 func (p plainKEM) CiphertextLen() int                        { return p.inner.CiphertextLen() }
@@ -445,7 +446,7 @@ func TestWithSEEC_IncapableKEMRejected(t *testing.T) {
 	}
 }
 
-// TestWithSEEC_DualLayerRejected pins C-3/C-17: dual-layer constructors
+// TestWithSEEC_DualLayerRejected pins that dual-layer constructors
 // reject WithSEEC instead of silently ignoring it.
 func TestWithSEEC_DualLayerRejected(t *testing.T) {
 	s := mustTestSEEC(t)
@@ -468,12 +469,12 @@ func TestWithSEEC_DualLayerRejected(t *testing.T) {
 	}
 
 	outer, inner := mkLayers()
-	if _, err := clatter.NewDualLayerHandshake(outer, inner, 8192, clatter.WithSEEC(s)); !errors.Is(err, clatter.ErrSEEC) {
-		t.Fatalf("DualLayer with WithSEEC: want ErrSEEC, got %v", err)
+	if _, err := clatter.NewDualLayerHandshake(outer, inner, 8192, clatter.WithSEEC(s)); !errors.Is(err, clatter.ErrInvalidOption) {
+		t.Fatalf("DualLayer with WithSEEC: want ErrInvalidOption, got %v", err)
 	}
 	outer, inner = mkLayers()
-	if _, err := clatter.NewHybridDualLayerHandshake(outer, inner, 8192, clatter.WithSEEC(s)); !errors.Is(err, clatter.ErrSEEC) {
-		t.Fatalf("HybridDualLayer with WithSEEC: want ErrSEEC, got %v", err)
+	if _, err := clatter.NewHybridDualLayerHandshake(outer, inner, 8192, clatter.WithSEEC(s)); !errors.Is(err, clatter.ErrInvalidOption) {
+		t.Fatalf("HybridDualLayer with WithSEEC: want ErrInvalidOption, got %v", err)
 	}
 
 	// Per-layer SEEC is the supported composition: layers constructed
@@ -513,7 +514,7 @@ type failingRng struct{}
 
 func (failingRng) Read(_ []byte) (int, error) { return 0, errors.New("rng device failed") }
 
-// TestSEEC_FailingRngMidHandshake pins SEEC-31/SEEC-16: an rng failure
+// TestSEEC_FailingRngMidHandshake pins that an rng failure
 // during a SEEC-on handshake fails CLOSED mid-handshake - StatusError,
 // state zeroed, no fallback to secret-only coins.
 func TestSEEC_FailingRngMidHandshake(t *testing.T) {
@@ -594,7 +595,7 @@ func TestSEEC_HostileImplThroughHandshake(t *testing.T) {
 	}
 }
 
-// TestSEEC_DestroyMidHandshake pins D-4: destroying the shared SEEC
+// TestSEEC_DestroyMidHandshake pins that destroying the shared SEEC
 // instance mid-handshake fails the affected handshake closed on its next
 // draw, with both ErrSEEC and ErrDestroyed reachable.
 func TestSEEC_DestroyMidHandshake(t *testing.T) {
@@ -651,8 +652,8 @@ func TestSEEC_DestroyMidHandshake(t *testing.T) {
 	}
 }
 
-// TestSEEC_ConstantRngRepeatsCoins documents the model boundary (H-10,
-// SEEC-29): SEEC hedges coin SECRECY, never coin FRESHNESS. Under a dead
+// TestSEEC_ConstantRngRepeatsCoins documents the model boundary:
+// SEEC hedges coin SECRECY, never coin FRESHNESS. Under a dead
 // rng with the same secret, two fresh handshakes produce IDENTICAL first
 // messages - by design, not by defect.
 func TestSEEC_ConstantRngRepeatsCoins(t *testing.T) {
@@ -754,7 +755,7 @@ func TestSEEC_SharedInstanceHandshakeHammer(t *testing.T) {
 	}
 }
 
-// --- SEEC-36 role-asymmetric draw counts + reduced smoke sweep ---
+// --- role-asymmetric draw counts + reduced smoke sweep ---
 
 // countingSEEC counts GenRand calls per purpose, delegating to an inner SEEC.
 type countingSEEC struct {
@@ -813,7 +814,7 @@ func expectedSEECDraws(p *clatter.HandshakePattern, family string, initiatorSide
 // to completion with SEEC on BOTH sides through production ML-KEM-768
 // adapters. For every (pattern, role) the observed GenRand call counts
 // are pinned against the table computed from the pattern definition
-// (SEEC-36 role asymmetry: e.g. the pqXX responder draws zero keygens,
+// (role asymmetry: e.g. the pqXX responder draws zero keygens,
 // one-way receivers draw nothing at all).
 func TestSEEC_DrawCountSweep(t *testing.T) {
 	pqSuiteP := clatter.CipherSuite{
@@ -871,12 +872,12 @@ func TestSEEC_DrawCountSweep(t *testing.T) {
 					t.Fatal(e1, e2)
 				}
 				a, err = clatter.NewPqHandshake(sc.pattern, true, pqSuiteP,
-					clatter.WithStaticKey(aS), clatter.WithRemoteStatic(bS.Public), clatter.WithSEEC(iCount))
+					append(singleStaticOpts(sc.pattern, true, aS, bS.Public), clatter.WithSEEC(iCount))...)
 				if err != nil {
 					t.Fatal(err)
 				}
 				b, err = clatter.NewPqHandshake(sc.pattern, false, pqSuiteP,
-					clatter.WithStaticKey(bS), clatter.WithRemoteStatic(aS.Public), clatter.WithSEEC(rCount))
+					append(singleStaticOpts(sc.pattern, false, bS, aS.Public), clatter.WithSEEC(rCount))...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -889,16 +890,12 @@ func TestSEEC_DrawCountSweep(t *testing.T) {
 					t.Fatal(e1, e2, e3, e4)
 				}
 				a, err = clatter.NewHybridHandshake(sc.pattern, true, hySuiteP,
-					clatter.WithStaticKey(aDH), clatter.WithRemoteStatic(bDH.Public),
-					clatter.WithStaticKEMKey(aKEM), clatter.WithRemoteStaticKEMKey(bKEM.Public),
-					clatter.WithSEEC(iCount))
+					append(hybridStaticOpts(sc.pattern, true, aDH, bDH.Public, aKEM, bKEM.Public), clatter.WithSEEC(iCount))...)
 				if err != nil {
 					t.Fatal(err)
 				}
 				b, err = clatter.NewHybridHandshake(sc.pattern, false, hySuiteP,
-					clatter.WithStaticKey(bDH), clatter.WithRemoteStatic(aDH.Public),
-					clatter.WithStaticKEMKey(bKEM), clatter.WithRemoteStaticKEMKey(aKEM.Public),
-					clatter.WithSEEC(rCount))
+					append(hybridStaticOpts(sc.pattern, false, bDH, aDH.Public, bKEM, aKEM.Public), clatter.WithSEEC(rCount))...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -909,12 +906,12 @@ func TestSEEC_DrawCountSweep(t *testing.T) {
 					t.Fatal(e1, e2)
 				}
 				a, err = clatter.NewNqHandshake(sc.pattern, true, nqSuiteP,
-					clatter.WithStaticKey(aS), clatter.WithRemoteStatic(bS.Public), clatter.WithSEEC(iCount))
+					append(singleStaticOpts(sc.pattern, true, aS, bS.Public), clatter.WithSEEC(iCount))...)
 				if err != nil {
 					t.Fatal(err)
 				}
 				b, err = clatter.NewNqHandshake(sc.pattern, false, nqSuiteP,
-					clatter.WithStaticKey(bS), clatter.WithRemoteStatic(aS.Public), clatter.WithSEEC(rCount))
+					append(singleStaticOpts(sc.pattern, false, bS, aS.Public), clatter.WithSEEC(rCount))...)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -196,25 +196,35 @@ func NewPublicKey(ps ParamSet, pubBytes []byte) (*PublicKey, error) {
 //
 // The ParamSet is NOT authenticated. Use application-layer integrity
 // checks if the wire format is untrusted.
+//
+// Every failure matches errors.Is(err, [ErrInvalidPublicKey]). Structural
+// causes additionally wrap a specific sentinel so a caller may distinguish
+// them: a bad version byte wraps [ErrUnsupportedVersion]; an unknown or
+// unavailable parameter set wraps [ErrInvalidParamSet]; a wrong total length or
+// an undecodable key body wraps [ErrInvalidPublicKeySize]. (Data too short to
+// hold the 2-byte header returns the bare umbrella.) Distinguishing these is
+// oracle-safe: every byte examined is caller-supplied and no secret is
+// involved. This matches the granularity of [NewPublicKey] and
+// [NewPrivateKeyFromBytes].
 func ParsePublicKey(data []byte) (*PublicKey, error) {
 	if len(data) < 2 {
 		return nil, ErrInvalidPublicKey
 	}
 	if data[0] != 1 {
-		return nil, ErrInvalidPublicKey
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPublicKey, ErrUnsupportedVersion)
 	}
 	ps := ParamSet(data[1])
 	if !runtimeReady(ps) {
-		return nil, ErrInvalidPublicKey
+		return nil, fmt.Errorf("%w: %w: %s", ErrInvalidPublicKey, ErrInvalidParamSet, ps)
 	}
 	params := ps.internalParams()
 	expected := int(params.N) * 2
 	if len(data) != 2+expected {
-		return nil, ErrInvalidPublicKey
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPublicKey, ErrInvalidPublicKeySize)
 	}
 	pk, err := internal.LoadPublicKey(params, data[2:])
 	if err != nil {
-		return nil, ErrInvalidPublicKey
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPublicKey, ErrInvalidPublicKeySize)
 	}
 	return &PublicKey{paramSet: ps, params: params, internalPK: pk}, nil
 }
@@ -224,13 +234,13 @@ func ParsePublicKey(data []byte) (*PublicKey, error) {
 // SignMessage signs msg using hedged randomness (recommended for production).
 // Equivalent to SignWithContext(msg, "").
 func (k *PrivateKey) SignMessage(msg []byte) ([]byte, error) {
-	return k.signPure(msg, "")
+	return k.signPureRand(msg, "", nil)
 }
 
 // SignWithContext signs msg with a context string for domain separation.
 // The context must be at most 255 bytes.
 func (k *PrivateKey) SignWithContext(msg []byte, ctx string) ([]byte, error) {
-	return k.signPure(msg, ctx)
+	return k.signPureRand(msg, ctx, nil)
 }
 
 // SignDeterministic signs msg deterministically (same message + key = same
@@ -245,7 +255,10 @@ func (k *PrivateKey) SignDeterministicWithContext(msg []byte, ctx string) ([]byt
 	return k.signDeterministic(msg, ctx)
 }
 
-func (k *PrivateKey) signPure(msg []byte, ctx string) ([]byte, error) {
+// signPureRand signs the FULL message msg in pure mode. rand selects the
+// addrnd source: nil => crypto/rand (the named SignMessage/SignWithContext
+// path); a non-nil reader is honored by the crypto.Signer Sign entry.
+func (k *PrivateKey) signPureRand(msg []byte, ctx string, rand io.Reader) ([]byte, error) {
 	if k == nil {
 		return nil, ErrDestroyed
 	}
@@ -259,14 +272,15 @@ func (k *PrivateKey) signPure(msg []byte, ctx string) ([]byte, error) {
 	}
 
 	mprime := makeMPrime(normalizeMsg(msg), ctx)
-	n := int(k.params.N)
-	addrnd := make([]byte, n)
-	// entropy.Fill for fail-closed reads (see GenerateKey).
-	if err := entropy.Fill(crypto_rand.Reader, addrnd); err != nil {
-		return nil, fmt.Errorf("slhdsa: generate addrnd: %w", err)
+	return k.signMPrime(mprime, rand)
+}
+
+// randOrDefault returns r, or crypto/rand.Reader when r is nil.
+func randOrDefault(r io.Reader) io.Reader {
+	if r == nil {
+		return crypto_rand.Reader
 	}
-	sig := internal.SLHSignInternal(k.params, mprime, k.internalKey, addrnd)
-	return sig.Bytes(), nil
+	return r
 }
 
 func (k *PrivateKey) signDeterministic(msg []byte, ctx string) ([]byte, error) {
@@ -372,25 +386,78 @@ type SignerOpts struct {
 	Context string
 }
 
-// HashFunc returns the hash function identifier for crypto.SignerOpts.
+// HashFunc returns the stdlib crypto.Hash that names the pre-hash function,
+// satisfying crypto.SignerOpts. It returns the matching crypto.Hash for the
+// SHA2/SHA3 functions, and 0 for SHAKE-128/256 (which have NO crypto.Hash
+// constant) and for the zero value.
+//
+// A generic crypto.Signer consumer reads this to learn which hash to apply
+// before calling Sign. SHAKE pre-hash cannot be expressed through crypto.Hash
+// (a limitation of the Go standard library, not this package); to use SHAKE
+// pre-hash, pass this *SignerOpts to Sign with Hash set to HashSHAKE128/256 -
+// Sign reads the Hash field directly, so a 0 from HashFunc does not block it.
 func (o *SignerOpts) HashFunc() crypto.Hash {
 	if o == nil {
 		return 0
 	}
-	return crypto.Hash(o.Hash)
+	return hashFuncToCryptoHash(o.Hash)
 }
 
-// Sign implements crypto.Signer.
+// hashFuncToCryptoHash maps a HashFunc to the stdlib crypto.Hash naming the
+// same function, or 0 when none exists (SHAKE128/256 or an invalid value).
+// Inverse of cryptoHashToHashFunc for the 10 SHA2/SHA3 functions.
+func hashFuncToCryptoHash(hf HashFunc) crypto.Hash {
+	switch hf {
+	case HashSHA2_224:
+		return crypto.SHA224
+	case HashSHA2_256:
+		return crypto.SHA256
+	case HashSHA2_384:
+		return crypto.SHA384
+	case HashSHA2_512:
+		return crypto.SHA512
+	case HashSHA2_512224:
+		return crypto.SHA512_224
+	case HashSHA2_512256:
+		return crypto.SHA512_256
+	case HashSHA3_224:
+		return crypto.SHA3_224
+	case HashSHA3_256:
+		return crypto.SHA3_256
+	case HashSHA3_384:
+		return crypto.SHA3_384
+	case HashSHA3_512:
+		return crypto.SHA3_512
+	default: // HashSHAKE128, HashSHAKE256, 0, or invalid
+		return 0
+	}
+}
+
+// Sign implements crypto.Signer per the standard contract.
 //
-// For SLH-DSA, the digest parameter is always the FULL message regardless
-// of HashFunc. Pre-hashing is computed internally by the wrapper.
+// Pure mode is selected when no pre-hash function is resolved: opts is nil, a
+// plain crypto.Hash equal to 0, or a *SignerOpts whose Hash field is 0. In
+// pure mode digest is the FULL message and the wrapper performs SLH-DSA's
+// internal hashing. Note opts.HashFunc() == 0 does NOT by itself imply pure
+// mode: a *SignerOpts with Hash = HashSHAKE128/256 selects PRE-HASH mode even
+// though HashFunc() reports 0, because Sign reads the Hash field directly.
 //
-// The rand parameter is accepted for crypto.Signer compatibility and is
-// IGNORED: hedged signing always draws its per-signature randomness from
-// crypto/rand internally, regardless of what is passed. If opts is nil
-// or opts.HashFunc() == 0, pure mode is used. If opts.HashFunc() != 0,
-// pre-hash mode is used.
+// In pre-hash mode (a non-zero pre-hash hash function is resolved), digest is
+// the ALREADY-COMPUTED pre-hash PH(M) of the message, as the standard
+// crypto.Signer contract requires. It is used directly with no re-hashing and
+// MUST be exactly the output length of the selected hash function, else
+// ErrInvalidDigestLength is returned (FIPS 205 Algorithm 25).
+//
+// rand is honored: when non-nil it supplies the per-signature randomizer
+// (SLH-DSA is safe against randomizer reuse); when nil, crypto/rand is used.
+// A non-nil rand MUST NOT be shared across concurrent Sign calls.
+//
+// To select a pre-hash function, pass a *SignerOpts (which can also carry a
+// Context and can reach SHAKE, which has no crypto.Hash constant) or pass a
+// crypto.Hash directly as opts.
 func (k *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	// Short-circuit a nil key before any opts parsing; the inner *Rand signers
+	// re-check (they are also reachable from the named methods).
 	if k == nil {
 		return nil, ErrDestroyed
 	}
@@ -412,9 +479,9 @@ func (k *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts)
 	}
 
 	if hashFunc != 0 {
-		return k.SignPreHashWithContext(digest, hashFunc, ctx)
+		return k.signPreHashDigestRand(digest, hashFunc, ctx, rand)
 	}
-	return k.SignWithContext(digest, ctx)
+	return k.signPureRand(digest, ctx, rand)
 }
 
 // cryptoHashToHashFunc maps Go's crypto.Hash to our HashFunc.
@@ -545,11 +612,20 @@ func sigSize(p internal.ParamSet) int {
 
 // --- Internal helpers ---
 
+// FIPS 205 message-encoding domain separators for M' (the single most
+// security-load-bearing bytes in the construction: mixing them up is a
+// cross-mode forgery surface). Pure mode (Algorithm 22) and pre-hash mode
+// (Algorithm 25) live in disjoint M' spaces distinguished only by this byte.
+const (
+	mPrimePureDomain    byte = 0x00 // pure SLH-DSA (FIPS 205 Algorithm 22)
+	mPrimePreHashDomain byte = 0x01 // Hash-SLH-DSA (FIPS 205 Algorithm 25)
+)
+
 // makeMPrime constructs M' for pure SLH-DSA (FIPS 205 Algorithm 22).
 // M' = [0x00 | ctxLen | ctx | M]
 func makeMPrime(msg []byte, ctx string) []byte {
 	mp := make([]byte, 0, 2+len(ctx)+len(msg))
-	mp = append(mp, 0x00)
+	mp = append(mp, mPrimePureDomain)
 	mp = append(mp, byte(len(ctx)))
 	mp = append(mp, []byte(ctx)...)
 	mp = append(mp, msg...)

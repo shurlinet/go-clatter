@@ -244,20 +244,16 @@ func TestSmokeNqHandshakes(t *testing.T) {
 			aliceS, _ := x.GenerateKeypair(clatter.NewDummyRng(1))
 			bobS, _ := x.GenerateKeypair(clatter.NewDummyRng(2))
 
-			alice, err := clatter.NewNqHandshake(p, true, suite,
-				clatter.WithStaticKey(aliceS),
-				clatter.WithRemoteStatic(bobS.Public),
-				clatter.WithPrologue([]byte("Spinning round and round")),
-			)
+			aliceOpts := append(singleStaticOpts(p, true, aliceS, bobS.Public),
+				clatter.WithPrologue([]byte("Spinning round and round")))
+			alice, err := clatter.NewNqHandshake(p, true, suite, aliceOpts...)
 			if err != nil {
 				t.Fatalf("%s: alice: %v", label, err)
 			}
 
-			bob, err := clatter.NewNqHandshake(p, false, suite,
-				clatter.WithStaticKey(bobS),
-				clatter.WithRemoteStatic(aliceS.Public),
-				clatter.WithPrologue([]byte("Spinning round and round")),
-			)
+			bobOpts := append(singleStaticOpts(p, false, bobS, aliceS.Public),
+				clatter.WithPrologue([]byte("Spinning round and round")))
+			bob, err := clatter.NewNqHandshake(p, false, suite, bobOpts...)
 			if err != nil {
 				t.Fatalf("%s: bob: %v", label, err)
 			}
@@ -299,20 +295,16 @@ func TestSmokePqHandshakes(t *testing.T) {
 				aliceS, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(10))
 				bobS, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(20))
 
-				alice, err := clatter.NewPqHandshake(p, true, suite,
-					clatter.WithStaticKey(aliceS),
-					clatter.WithRemoteStatic(bobS.Public),
-					clatter.WithPrologue([]byte("Stumbling all around")),
-				)
+				aliceOpts := append(singleStaticOpts(p, true, aliceS, bobS.Public),
+					clatter.WithPrologue([]byte("Stumbling all around")))
+				alice, err := clatter.NewPqHandshake(p, true, suite, aliceOpts...)
 				if err != nil {
 					t.Fatalf("%s: alice: %v", label, err)
 				}
 
-				bob, err := clatter.NewPqHandshake(p, false, suite,
-					clatter.WithStaticKey(bobS),
-					clatter.WithRemoteStatic(aliceS.Public),
-					clatter.WithPrologue([]byte("Stumbling all around")),
-				)
+				bobOpts := append(singleStaticOpts(p, false, bobS, aliceS.Public),
+					clatter.WithPrologue([]byte("Stumbling all around")))
+				bob, err := clatter.NewPqHandshake(p, false, suite, bobOpts...)
 				if err != nil {
 					t.Fatalf("%s: bob: %v", label, err)
 				}
@@ -358,24 +350,16 @@ func TestSmokeHybridHandshakes(t *testing.T) {
 				aliceKEM, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(50))
 				bobKEM, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(60))
 
-				alice, err := clatter.NewHybridHandshake(p, true, suite,
-					clatter.WithStaticKey(aliceDH),
-					clatter.WithRemoteStatic(bobDH.Public),
-					clatter.WithStaticKEMKey(aliceKEM),
-					clatter.WithRemoteStaticKEMKey(bobKEM.Public),
-					clatter.WithPrologue([]byte("Stumbling all around")),
-				)
+				aliceOpts := append(hybridStaticOpts(p, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public),
+					clatter.WithPrologue([]byte("Stumbling all around")))
+				alice, err := clatter.NewHybridHandshake(p, true, suite, aliceOpts...)
 				if err != nil {
 					t.Fatalf("%s: alice: %v", label, err)
 				}
 
-				bob, err := clatter.NewHybridHandshake(p, false, suite,
-					clatter.WithStaticKey(bobDH),
-					clatter.WithRemoteStatic(aliceDH.Public),
-					clatter.WithStaticKEMKey(bobKEM),
-					clatter.WithRemoteStaticKEMKey(aliceKEM.Public),
-					clatter.WithPrologue([]byte("Stumbling all around")),
-				)
+				bobOpts := append(hybridStaticOpts(p, false, bobDH, aliceDH.Public, bobKEM, aliceKEM.Public),
+					clatter.WithPrologue([]byte("Stumbling all around")))
+				bob, err := clatter.NewHybridHandshake(p, false, suite, bobOpts...)
 				if err != nil {
 					t.Fatalf("%s: bob: %v", label, err)
 				}
@@ -429,38 +413,30 @@ func TestSmokeDualLayerHandshakes(t *testing.T) {
 						alicePqS, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(pqSeed))
 						bobPqS, _ := k.skem.GenerateKeypair(clatter.NewDummyRng(pqSeed + 1))
 
-						aNQ, err := clatter.NewNqHandshake(nqPat, true, nqSuite,
-							clatter.WithStaticKey(aliceNqS),
-							clatter.WithRemoteStatic(bobNqS.Public),
-							clatter.WithPrologue([]byte("Spinning round and round")),
-						)
+						aNQOpts := append(singleStaticOpts(nqPat, true, aliceNqS, bobNqS.Public),
+							clatter.WithPrologue([]byte("Spinning round and round")))
+						aNQ, err := clatter.NewNqHandshake(nqPat, true, nqSuite, aNQOpts...)
 						if err != nil {
 							t.Fatalf("%s: alice NQ: %v", label, err)
 						}
-						bNQ, err := clatter.NewNqHandshake(nqPat, false, nqSuite,
-							clatter.WithStaticKey(bobNqS),
-							clatter.WithRemoteStatic(aliceNqS.Public),
-							clatter.WithPrologue([]byte("Spinning round and round")),
-						)
+						bNQOpts := append(singleStaticOpts(nqPat, false, bobNqS, aliceNqS.Public),
+							clatter.WithPrologue([]byte("Spinning round and round")))
+						bNQ, err := clatter.NewNqHandshake(nqPat, false, nqSuite, bNQOpts...)
 						if err != nil {
 							t.Fatalf("%s: bob NQ: %v", label, err)
 						}
 						pushPSKs(t, aNQ, label)
 						pushPSKs(t, bNQ, label)
 
-						aPQ, err := clatter.NewPqHandshake(pqPat, true, pqSuite,
-							clatter.WithStaticKey(alicePqS),
-							clatter.WithRemoteStatic(bobPqS.Public),
-							clatter.WithPrologue([]byte("Stumbling all around")),
-						)
+						aPQOpts := append(singleStaticOpts(pqPat, true, alicePqS, bobPqS.Public),
+							clatter.WithPrologue([]byte("Stumbling all around")))
+						aPQ, err := clatter.NewPqHandshake(pqPat, true, pqSuite, aPQOpts...)
 						if err != nil {
 							t.Fatalf("%s: alice PQ: %v", label, err)
 						}
-						bPQ, err := clatter.NewPqHandshake(pqPat, false, pqSuite,
-							clatter.WithStaticKey(bobPqS),
-							clatter.WithRemoteStatic(alicePqS.Public),
-							clatter.WithPrologue([]byte("Stumbling all around")),
-						)
+						bPQOpts := append(singleStaticOpts(pqPat, false, bobPqS, alicePqS.Public),
+							clatter.WithPrologue([]byte("Stumbling all around")))
+						bPQ, err := clatter.NewPqHandshake(pqPat, false, pqSuite, bPQOpts...)
 						if err != nil {
 							t.Fatalf("%s: bob PQ: %v", label, err)
 						}

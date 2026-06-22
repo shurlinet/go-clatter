@@ -5,7 +5,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/shurlinet/go-clatter)](https://goreportcard.com/report/github.com/shurlinet/go-clatter)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Post-quantum [Noise](https://noiseprotocol.org/noise.html) handshakes for Go. Implements the [PQNoise](https://doi.org/10.1145/3548606.3560577) ([alt](https://sci-net.xyz/10.1145/3548606.3560577)) extensions (ACM CCS 2022) that replace classical DH key exchanges with quantum-resistant KEMs while preserving Noise's formal security guarantees.
+Post-quantum [Noise](https://noiseprotocol.org/noise.html) handshakes for Go. Implements the [PQNoise](https://eprint.iacr.org/2022/539) ([ACM CCS 2022](https://doi.org/10.1145/3548606.3560577), [alt](https://sci-net.xyz/10.1145/3548606.3560577)) extensions that replace classical DH key exchanges with quantum-resistant KEMs while preserving Noise's formal security guarantees.
 
 Ported from [Rust Clatter v2.2.0](https://github.com/jmlepisto/clatter) by [Joni Lepisto](https://github.com/jmlepisto) and verified against it byte-for-byte. Built on Go stdlib crypto (`crypto/mlkem`, `crypto/ecdh`) with `golang.org/x/crypto` for ChaCha20-Poly1305 and BLAKE2. No other external dependencies for Noise handshakes.
 
@@ -63,6 +63,7 @@ Standalone signing modules. Not integrated into the Noise handshake - these are 
 * **HKDF key derivation** - Manual HKDF implementation matching Noise spec (not a wrapper), with HMAC key length validation and full error propagation through HKDF2/HKDF3.
 * **Concurrency safety** - Handshake objects detect concurrent use via atomic guards and return errors. Transport ciphers use independent nonce counters per direction.
 * **Minimal dependencies** - Noise handshakes depend only on Go stdlib + `golang.org/x/crypto`. Signing modules add `filippo.io/mldsa` (ML-DSA) and embedded Trail of Bits engine (SLH-DSA).
+* **Construction-time pattern validation** - `NewPattern` rejects malformed custom patterns up front against the Noise [section 7.3](https://noiseprotocol.org/noise.html#pattern-validity) well-formedness rules: token limits, at-most-once key and DH-calculation counts, key-availability precedence, and forward secrecy. The forward-secrecy check extends the classical Noise rule, which is defined for Diffie-Hellman, to post-quantum KEM patterns - a static-KEM seal must be complemented by an *achievable* ephemeral-KEM - derived from first principles, since the classical well-formedness rules predate the post-quantum setting. Scope is deliberately narrow and worth reading with the right lens: it is a construction-time check that changes no wire bytes, all 90 built-in patterns satisfy it, and no real handshake is affected. It exists to fail loud on a *hand-authored custom pattern* that would otherwise be built with a forward-secrecy footgun - high cryptographic rigor, low practical blast radius.
 
 ## Spec Compliance
 
@@ -391,7 +392,7 @@ Thanks also to the projects whose test vector datasets we use to verify correctn
 * [Cacophony](https://github.com/haskell-cryptography/cacophony) (Haskell Noise implementation) - 944 test vectors
 * [Snow](https://github.com/mcginty/snow) (Rust Noise implementation) - 408 test vectors
 
-And to the authors of the PQNoise paper for the foundational research this library implements.
+Thanks to the authors of [Post-Quantum Noise](https://eprint.iacr.org/2022/539) (IACR ePrint 2022/539, the full version) for the foundational research this library implements. Special thanks to [Yawning Angel](https://github.com/Yawning) - a co-author of that paper and the author of [nyquist](https://github.com/Yawning/nyquist), the Go Noise implementation whose construction-time pattern-validation model guided go-clatter's Noise section 7.3 well-formedness hardening.
 
 Thanks to [Filippo Valsorda](https://filippo.io) for [`filippo.io/mldsa`](https://pkg.go.dev/filippo.io/mldsa) - the ML-DSA implementation that powers our signing module. Filippo maintains Go's cryptography standard library and designed this package as the direct precursor to `crypto/mldsa`. His work gives the Go ecosystem production-ready post-quantum signatures years before the stdlib ships them.
 

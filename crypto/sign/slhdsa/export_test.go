@@ -12,6 +12,10 @@ var MakeMPrimeForTest = makeMPrime
 // MakeMPrimePreHashForTest exposes makeMPrimePreHash for ACVP pre-hash vector tests.
 var MakeMPrimePreHashForTest = makeMPrimePreHash
 
+// AssembleMPrimePreHashForTest exposes assembleMPrimePreHash (digest-as-PH M'
+// assembly) so a test can prove the digest path matches the canonical path.
+var AssembleMPrimePreHashForTest = assembleMPrimePreHash
+
 // InternalParamsForTest returns the internal.ParamSet for a given ParamSet.
 func InternalParamsForTest(ps ParamSet) internal.ParamSet {
 	return ps.internalParams()

@@ -161,6 +161,19 @@ func (k *Hqc192) encapsWithCoins(pk, coins []byte) (ct, ss []byte, err error) {
 	return ciphertext, sharedSecret, nil
 }
 
+// ValidatePublicKey reports whether pk is a well-formed HQC-192 encapsulation
+// key. go-hqc performs no structural validation beyond length, so this is a
+// length check (not the expensive ParseEncapsulationKey192 XOF re-expansion);
+// it upgrades automatically if go-hqc adds a structural check. No rng, no side
+// effects, no [clatter.AllowExperimental] gate. Returns ErrKEMInvalidKey on a
+// wrong-length key.
+func (k *Hqc192) ValidatePublicKey(pk []byte) error {
+	if len(pk) != k.PubKeyLen() {
+		return fmt.Errorf("%w: HQC192 public key is %d bytes, want %d", clatter.ErrKEMInvalidKey, len(pk), k.PubKeyLen())
+	}
+	return nil
+}
+
 // Decapsulate recovers the shared secret from ciphertext and a 32-byte
 // secret key seed. The expanded decapsulation key is reconstructed from
 // the seed and destroyed immediately after use. Returns

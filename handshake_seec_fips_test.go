@@ -14,7 +14,7 @@ import (
 	"github.com/shurlinet/go-clatter/crypto/kem"
 )
 
-// TestSEEC_FIPS140OnlyFailsClosed empirically verifies the C-8/E-4 claim:
+// TestSEEC_FIPS140OnlyFailsClosed empirically verifies the claim:
 // under GODEBUG=fips140=only, crypto/mlkem/mlkemtest refuses derandomized
 // encapsulation, so SEEC-hedged encapsulation fails CLOSED - at the
 // adapter (EncapsulateWithCoins errors wrapping ErrKEM while production

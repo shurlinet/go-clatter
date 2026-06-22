@@ -68,11 +68,38 @@ func NewHybridHandshake(
 		}
 	}()
 
-	// Hybrid does not use the pre-set ephemeral option; zero the unused
-	// clone now.
-	if ho.ephemeralKey != nil {
-		ho.ephemeralKey.Destroy()
-		ho.ephemeralKey = nil
+	// Hybrid accepts BOTH pre-set DH ephemeral (WithEphemeralKey -> hs.e)
+	// AND pre-set KEM ephemeral (WithEphemeralKEMKey -> hs.kemE) for a party
+	// that emits Token::E. Both are validated below and routed after prologue
+	// mix. Unused options are zeroed by destroyKeyClones on construction failure.
+	//
+	// A pre-set ephemeral is only consumed by a party that emits Token::E. Every
+	// built-in Hybrid pattern has both roles emit Token::E, so these rejects
+	// never fire for them; they guard a custom pattern whose role emits no
+	// Token::E, where a preset would be a silent no-op.
+	if ho.ephemeralKey != nil && !pattern.sendsLocalEphemeral(initiator) {
+		return nil, errEphemeralNoOp("WithEphemeralKey", pattern.Name())
+	}
+	if ho.ephemeralKEMKey != nil && !pattern.sendsLocalEphemeral(initiator) {
+		return nil, errEphemeralNoOp("WithEphemeralKEMKey", pattern.Name())
+	}
+
+	// Hybrid Token::S and pre-message S carry BOTH the DH and KEM static, so a
+	// role uses both statics or neither: a static this role never transmits, or a
+	// remote static the peer never pre-shares, is a silent no-op for both the DH
+	// and KEM-named options. Reject each loudly. usesLocalStatic/usesRemoteStatic
+	// are exact because validateStaticAvailableBeforeUse already ran in NewPattern.
+	if ho.staticKey != nil && !pattern.usesLocalStatic(initiator) {
+		return nil, errStaticNoOp("WithStaticKey", pattern.Name())
+	}
+	if ho.staticKEM != nil && !pattern.usesLocalStatic(initiator) {
+		return nil, errStaticNoOp("WithStaticKEMKey", pattern.Name())
+	}
+	if ho.remoteStatic != nil && !pattern.usesRemoteStatic(initiator) {
+		return nil, errStaticNoOp("WithRemoteStatic", pattern.Name())
+	}
+	if ho.remoteStaticKEM != nil && !pattern.usesRemoteStatic(initiator) {
+		return nil, errStaticNoOp("WithRemoteStaticKEMKey", pattern.Name())
 	}
 
 	// SEEC option validation (nil and typed-nil rejected) plus capability
@@ -93,9 +120,27 @@ func NewHybridHandshake(
 	// Pre-set key lengths must match the suite (DH statics via
 	// WithStaticKey/WithRemoteStatic, KEM statics via the KEM options).
 	dhPubKeyLen := suite.DH.PubKeyLen()
+	dhSecKeyLen := suite.DH.SecretKeyLen()
 	skemPubKeyLen := suite.SKEM.PubKeyLen()
 	if ho.staticKey != nil {
 		if err := validateKeyLen("static key public", len(ho.staticKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyLen("static key secret", len(ho.staticKey.SecretSlice()), dhSecKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyPairConsistency(suite.DH, ho.staticKey, ErrDH, "static"); err != nil {
+			return nil, err
+		}
+	}
+	if ho.ephemeralKey != nil {
+		if err := validateKeyLen("ephemeral key public", len(ho.ephemeralKey.Public), dhPubKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyLen("ephemeral key secret", len(ho.ephemeralKey.SecretSlice()), dhSecKeyLen); err != nil {
+			return nil, err
+		}
+		if err := validateKeyPairConsistency(suite.DH, ho.ephemeralKey, ErrDH, "ephemeral"); err != nil {
 			return nil, err
 		}
 	}
@@ -108,9 +153,34 @@ func NewHybridHandshake(
 		if err := validateKeyLen("static KEM key public", len(ho.staticKEM.Public), skemPubKeyLen); err != nil {
 			return nil, err
 		}
+		if err := validateKeyLen("static KEM key secret", len(ho.staticKEM.SecretSlice()), suite.SKEM.SecretKeyLen()); err != nil {
+			return nil, err
+		}
+		if err := validateKeyPairConsistency(suite.SKEM, ho.staticKEM, ErrKEMInvalidKey, "static KEM"); err != nil {
+			return nil, err
+		}
 	}
 	if ho.remoteStaticKEM != nil {
 		if err := validateKeyLen("remote static KEM public", len(ho.remoteStaticKEM), skemPubKeyLen); err != nil {
+			return nil, err
+		}
+		// Structural validation (FIPS 203 Section 7.2): the remote KEM static is
+		// an encapsulation key we will encapsulate to. Reject a malformed key at
+		// construction instead of mid-handshake at the first Skem encapsulation.
+		// (The DH remote static needs no such check: X25519 has no invalid
+		// 32-byte encodings; low-order points are caught at DH time.)
+		if err := suite.SKEM.ValidatePublicKey(ho.remoteStaticKEM); err != nil {
+			return nil, err
+		}
+	}
+	if ho.ephemeralKEMKey != nil {
+		if err := validateKeyLen("ephemeral KEM public", len(ho.ephemeralKEMKey.Public), suite.EKEM.PubKeyLen()); err != nil {
+			return nil, err
+		}
+		if err := validateKeyLen("ephemeral KEM secret", len(ho.ephemeralKEMKey.SecretSlice()), suite.EKEM.SecretKeyLen()); err != nil {
+			return nil, err
+		}
+		if err := validateKeyPairConsistency(suite.EKEM, ho.ephemeralKEMKey, ErrKEMInvalidKey, "ephemeral KEM"); err != nil {
 			return nil, err
 		}
 	}
@@ -152,6 +222,11 @@ func NewHybridHandshake(
 		hs.s = ho.staticKey
 	}
 
+	// Set pre-existing DH ephemeral key (test vector path)
+	if ho.ephemeralKey != nil {
+		hs.e = ho.ephemeralKey
+	}
+
 	// Set remote DH static public key
 	if ho.remoteStatic != nil {
 		hs.rs = &KeyPair{Public: ho.remoteStatic}
@@ -163,6 +238,11 @@ func NewHybridHandshake(
 	}
 	if ho.remoteStaticKEM != nil {
 		hs.kemRS = &KeyPair{Public: ho.remoteStaticKEM}
+	}
+
+	// Set pre-existing KEM ephemeral key (test vector path)
+	if ho.ephemeralKEMKey != nil {
+		hs.kemE = ho.ephemeralKEMKey
 	}
 
 	// Validate maxMsgLen is large enough for every message in the pattern
@@ -205,6 +285,11 @@ func NewHybridHandshake(
 			}
 			return 0
 		}); err != nil {
+			// Zero the partially-built handshake state on failure, matching
+			// the processPreMessages path below (consistent fail-closed
+			// cleanup; the deferred destroyKeyClones additionally zeros the
+			// option clones).
+			hs.Destroy()
 			return nil, err
 		}
 	}
@@ -736,8 +821,10 @@ func (hs *HybridHandshake) processReadToken(token Token, reader *messageReader) 
 	}
 }
 
-// writeTokenE generates BOTH DH AND KEM ephemeral keypairs, writes both public
-// keys to the output buffer, and mixes them into the handshake state.
+// writeTokenE generates or uses pre-set DH AND KEM ephemeral keypairs, writes
+// both public keys to the output buffer, and mixes them into the handshake state.
+// Each key is independently generated only if not already pre-set via
+// WithEphemeralKey (DH-e) or WithEphemeralKEMKey (KEM-e).
 // DH pubkey is written first, then KEM pubkey (matching Rust hybrid.rs order).
 // Sets ownRandApplied after all crypto operations complete.
 func (hs *HybridHandshake) writeTokenE(out []byte) (int, error) {
@@ -817,6 +904,15 @@ func (hs *HybridHandshake) readTokenE(reader *messageReader) error {
 
 	hs.kemRE = &KeyPair{Public: make([]byte, kemPubLen)}
 	copy(hs.kemRE.Public, kemPubBytes)
+
+	// Structural validation (FIPS 203 Section 7.2): we will encapsulate to this
+	// remote KEM ephemeral (Ekem). Reject a malformed key here, before it is
+	// mixed into the transcript and before the late Ekem encapsulation; the
+	// error aborts ReadMessage via setError before the observer is notified.
+	// (The DH remote ephemeral read above needs no such check.)
+	if err := hs.ekem.ValidatePublicKey(hs.kemRE.Public); err != nil {
+		return err
+	}
 
 	hs.symmetricState.MixHash(hs.kemRE.Public)
 	if hs.pattern.HasPSK() {
@@ -900,6 +996,15 @@ func (hs *HybridHandshake) readTokenS(reader *messageReader) error {
 	}
 	hs.kemRS = &KeyPair{Public: make([]byte, len(kemPubBytes))}
 	copy(hs.kemRS.Public, kemPubBytes)
+
+	// Structural validation (FIPS 203 Section 7.2): the learned remote KEM
+	// static is an encapsulation key we may encapsulate to (Skem). Reject a
+	// malformed key here rather than at the later encapsulation; the error
+	// aborts ReadMessage via setError before the observer is notified. (The DH
+	// remote static read above needs no such check.)
+	if err := hs.skem.ValidatePublicKey(hs.kemRS.Public); err != nil {
+		return err
+	}
 
 	return nil
 }

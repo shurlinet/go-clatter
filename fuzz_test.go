@@ -19,14 +19,8 @@ func setupNqPair(pattern *clatter.HandshakePattern, suite clatter.CipherSuite) (
 	aliceS, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(1))
 	bobS, _ := suite.DH.GenerateKeypair(clatter.NewDummyRng(2))
 
-	alice, _ := clatter.NewNqHandshake(pattern, true, suite,
-		clatter.WithStaticKey(aliceS),
-		clatter.WithRemoteStatic(bobS.Public),
-	)
-	bob, _ := clatter.NewNqHandshake(pattern, false, suite,
-		clatter.WithStaticKey(bobS),
-		clatter.WithRemoteStatic(aliceS.Public),
-	)
+	alice, _ := clatter.NewNqHandshake(pattern, true, suite, singleStaticOpts(pattern, true, aliceS, bobS.Public)...)
+	bob, _ := clatter.NewNqHandshake(pattern, false, suite, singleStaticOpts(pattern, false, bobS, aliceS.Public)...)
 	_ = alice.PushPSK(fuzzPSK)
 	_ = bob.PushPSK(fuzzPSK)
 	return alice, bob
@@ -37,14 +31,8 @@ func setupPqPair(pattern *clatter.HandshakePattern, suite clatter.CipherSuite) (
 	aliceS, _ := suite.SKEM.GenerateKeypair(clatter.NewDummyRng(10))
 	bobS, _ := suite.SKEM.GenerateKeypair(clatter.NewDummyRng(20))
 
-	alice, _ := clatter.NewPqHandshake(pattern, true, suite,
-		clatter.WithStaticKey(aliceS),
-		clatter.WithRemoteStatic(bobS.Public),
-	)
-	bob, _ := clatter.NewPqHandshake(pattern, false, suite,
-		clatter.WithStaticKey(bobS),
-		clatter.WithRemoteStatic(aliceS.Public),
-	)
+	alice, _ := clatter.NewPqHandshake(pattern, true, suite, singleStaticOpts(pattern, true, aliceS, bobS.Public)...)
+	bob, _ := clatter.NewPqHandshake(pattern, false, suite, singleStaticOpts(pattern, false, bobS, aliceS.Public)...)
 	_ = alice.PushPSK(fuzzPSK)
 	_ = bob.PushPSK(fuzzPSK)
 	return alice, bob
@@ -58,17 +46,9 @@ func setupHybridPair(pattern *clatter.HandshakePattern, suite clatter.CipherSuit
 	bobKEM, _ := suite.SKEM.GenerateKeypair(clatter.NewDummyRng(60))
 
 	alice, _ := clatter.NewHybridHandshake(pattern, true, suite,
-		clatter.WithStaticKey(aliceDH),
-		clatter.WithRemoteStatic(bobDH.Public),
-		clatter.WithStaticKEMKey(aliceKEM),
-		clatter.WithRemoteStaticKEMKey(bobKEM.Public),
-	)
+		hybridStaticOpts(pattern, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public)...)
 	bob, _ := clatter.NewHybridHandshake(pattern, false, suite,
-		clatter.WithStaticKey(bobDH),
-		clatter.WithRemoteStatic(aliceDH.Public),
-		clatter.WithStaticKEMKey(bobKEM),
-		clatter.WithRemoteStaticKEMKey(aliceKEM.Public),
-	)
+		hybridStaticOpts(pattern, false, bobDH, aliceDH.Public, bobKEM, aliceKEM.Public)...)
 	_ = alice.PushPSK(fuzzPSK)
 	_ = bob.PushPSK(fuzzPSK)
 	return alice, bob
@@ -229,7 +209,7 @@ func FuzzNqTransport(f *testing.F) {
 
 // FuzzPqHandshakeRead feeds random bytes to PQ ReadMessage.
 // Matches Rust: pq_handshake_read.rs
-// Also drives a SEEC-on pqXX pair per input (C-10vi): the SEEC wiring
+// Also drives a SEEC-on pqXX pair per input: the SEEC wiring
 // must never panic on hostile incoming bytes either.
 func FuzzPqHandshakeRead(f *testing.F) {
 	f.Add([]byte{0, 1, 2, 3})

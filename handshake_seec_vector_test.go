@@ -15,14 +15,14 @@ import (
 	"github.com/shurlinet/go-clatter/crypto/kem"
 )
 
-// SEEC-on pinned transcripts (D-6). Every byte is hand-derivable from:
+// SEEC-on pinned transcripts. Every byte is hand-derivable from:
 // DummyRng(0xdeadbeef) shared by both sides, the fixed SEEC secret
 // 0x01..0x20 through SEECPRF(SHA-256) shared by both sides, FIPS 203
 // derandomized encapsulation via the PRODUCTION adapters'
 // EncapsulateWithCoins, and the recipe in setupSeecVectorPair. There is
 // no cross-implementation source for these vectors (nyquist's SEEC
 // variant is TupleHash-based and untested upstream; Rust Clatter has no
-// SEEC); they are self-generated pins, frozen at Batch 2.
+// SEEC); they are self-generated pins, frozen with the SEEC wiring.
 //
 // Regenerate ONLY for a deliberate, documented construction change:
 //

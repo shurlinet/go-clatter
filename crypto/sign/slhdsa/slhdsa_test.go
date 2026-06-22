@@ -3,12 +3,26 @@ package slhdsa_test
 import (
 	"bytes"
 	"crypto"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"sync"
 	"testing"
 
+	"golang.org/x/crypto/sha3"
+
 	"github.com/shurlinet/go-clatter/crypto/sign/slhdsa"
 )
+
+// errSentinel + errReader exercise the fail-closed rand path: a reader
+// that always errors must make Sign return an error reachable via errors.Is.
+var errSentinel = errors.New("slhdsa_test: rng failure")
+
+type errReader struct{ err error }
+
+func (r *errReader) Read(p []byte) (int, error) { return 0, r.err }
 
 // mustHex decodes a hex string, failing the test on error.
 func mustHex(t *testing.T, s string) []byte {
@@ -320,21 +334,33 @@ func TestPublicKeyMarshalParse(t *testing.T) {
 }
 
 func TestParsePublicKeyInvalid(t *testing.T) {
+	// paramset 0 == SHA2_128f (a runtime-ready set), so {1, 0, 0} reaches the
+	// length check with a valid header and a too-short body -> size error;
+	// paramset 255 is unknown -> paramset error before any length check.
 	cases := []struct {
-		name string
-		data []byte
+		name    string
+		data    []byte
+		wantErr error
 	}{
-		{"empty", nil},
-		{"one byte", []byte{1}},
-		{"wrong version", []byte{2, 0, 0, 0}},
-		{"wrong paramset", []byte{1, 255}},
-		{"wrong length", []byte{1, 0, 0}},
+		{"empty", nil, slhdsa.ErrInvalidPublicKey},
+		{"one byte", []byte{1}, slhdsa.ErrInvalidPublicKey},
+		{"wrong version", []byte{2, 0, 0, 0}, slhdsa.ErrUnsupportedVersion},
+		{"wrong paramset", []byte{1, 255}, slhdsa.ErrInvalidParamSet},
+		{"wrong length", []byte{1, 0, 0}, slhdsa.ErrInvalidPublicKeySize},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := slhdsa.ParsePublicKey(tc.data)
 			if err == nil {
 				t.Fatal("expected error")
+			}
+			// The umbrella sentinel matches for every malformed input.
+			if !errors.Is(err, slhdsa.ErrInvalidPublicKey) {
+				t.Fatalf("want errors.Is ErrInvalidPublicKey, got %v", err)
+			}
+			// The specific cause is distinguishable.
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("want errors.Is %v, got %v", tc.wantErr, err)
 			}
 		})
 	}
@@ -413,17 +439,45 @@ func TestCryptoSignerForeignOpts(t *testing.T) {
 
 	msg := []byte("foreign opts test")
 
-	// Foreign opts with crypto.SHA256 must correctly map to HashSHA2_256
-	sig, err := priv.Sign(nil, msg, crypto.SHA256)
+	// Conforming crypto.Signer contract: the caller pre-hashes and passes the
+	// digest. Foreign opts crypto.SHA256 maps to HashSHA2_256; the digest is used
+	// directly as PH(M) with NO re-hash. VerifyPreHash takes the full message and
+	// computes PH itself, so it is the independent standard verifier.
+	d := sha256.Sum256(msg)
+	sig, err := priv.Sign(nil, d[:], crypto.SHA256)
 	if err != nil {
 		t.Fatalf("foreign opts SHA256: %v", err)
 	}
 	if !pub.VerifyPreHash(msg, sig, slhdsa.HashSHA2_256) {
-		t.Fatal("foreign opts SHA256 verify failed")
+		t.Fatal("conforming digest signature failed verification")
+	}
+
+	// MUTATION GUARD: the OLD abuse (full message passed as the "digest") must now
+	// be rejected. msg is 17 bytes != 32 (SHA-256), so the mandatory digest-length
+	// validation rejects it. This line PASSED under the old double-hash contract;
+	// under the conforming crypto.Signer contract it MUST fail.
+	_, err = priv.Sign(nil, msg, crypto.SHA256)
+	if !errors.Is(err, slhdsa.ErrInvalidDigestLength) {
+		t.Fatalf("full-message-as-digest must be rejected: got %v, want ErrInvalidDigestLength", err)
+	}
+
+	// EXACT-LENGTH residual: a 32-byte FULL message PASSES the
+	// length guard but is treated as PH(M), so it must NOT verify - the verifier
+	// computes PH(msg) != msg. This is the case the length guard cannot catch; it
+	// is the only guard against a regression that re-introduced an internal
+	// re-hash on the digest path (which would double-hash a 32-byte input and
+	// still pass every length check).
+	msg32 := bytes.Repeat([]byte{0xAB}, 32)
+	sig32, err := priv.Sign(nil, msg32, crypto.SHA256)
+	if err != nil {
+		t.Fatalf("32-byte input must pass the length guard: %v", err)
+	}
+	if pub.VerifyPreHash(msg32, sig32, slhdsa.HashSHA2_256) {
+		t.Fatal("a full message signed as a digest must NOT verify (proves the digest path does not re-hash)")
 	}
 
 	// Foreign opts with unsupported hash must return error
-	_, err = priv.Sign(nil, msg, crypto.MD5)
+	_, err = priv.Sign(nil, d[:], crypto.MD5)
 	if err == nil {
 		t.Fatal("foreign opts MD5 should fail")
 	}
@@ -579,8 +633,9 @@ func TestCryptoSignerPreHash(t *testing.T) {
 	pub := priv.PublicKey()
 
 	msg := []byte("crypto.Signer pre-hash test")
+	d := sha256.Sum256(msg)
 	opts := &slhdsa.SignerOpts{Hash: slhdsa.HashSHA2_256, Context: "prehash/ctx"}
-	sig, err := priv.Sign(nil, msg, opts)
+	sig, err := priv.Sign(nil, d[:], opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -845,5 +900,325 @@ func BenchmarkVerify_BLAKE3_128f(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pub.Verify(msg, sig)
+	}
+}
+
+// --- crypto.Signer hardening: honor rand + digest-as-prehash + validation + HashFunc truth ---
+
+// TestCryptoSignerHonorsRand verifies a non-nil rand is honored
+// (deterministic reproducibility), nil falls back to crypto/rand, and an
+// erroring reader fails closed with the error reachable via errors.Is.
+func TestCryptoSignerHonorsRand(t *testing.T) {
+	// Table-driven across N in {16,24,32} and both hash families so the
+	// N-dependent addrnd path (signMPrime: addrnd = make([]byte, params.N)) is
+	// exercised on every size, not just N=16.
+	for _, ps := range []slhdsa.ParamSet{slhdsa.SHA2_128f, slhdsa.SHA2_192f, slhdsa.SHAKE_256f} {
+		ps := ps
+		t.Run(ps.String(), func(t *testing.T) {
+			priv, err := slhdsa.GenerateKey(ps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer priv.Destroy()
+			pub := priv.PublicKey()
+			msg := []byte("rand honoring test")
+			n := int(ps.N())
+
+			// Deterministic reader of EXACTLY n bytes (nil error on the fill) ->
+			// reproducible signature.
+			seed := bytes.Repeat([]byte{0x5A}, n)
+			s1, err := priv.Sign(bytes.NewReader(seed), msg, nil)
+			if err != nil {
+				t.Fatalf("Sign(det 1): %v", err)
+			}
+			s2, err := priv.Sign(bytes.NewReader(seed), msg, nil)
+			if err != nil {
+				t.Fatalf("Sign(det 2): %v", err)
+			}
+			if !bytes.Equal(s1, s2) {
+				t.Fatal("same deterministic rand must produce the same signature")
+			}
+			if !pub.Verify(msg, s1) {
+				t.Fatal("deterministic-rand signature failed verification")
+			}
+
+			// The FULL n-byte addrnd is consumed: flipping the LAST seed byte
+			// must change the signature. Catches a bug that sized addrnd to a
+			// hardcoded length instead of params.N.
+			seed2 := bytes.Repeat([]byte{0x5A}, n)
+			seed2[n-1] ^= 0xFF
+			s3, err := priv.Sign(bytes.NewReader(seed2), msg, nil)
+			if err != nil {
+				t.Fatalf("Sign(det flipped): %v", err)
+			}
+			if bytes.Equal(s1, s3) {
+				t.Fatal("changing the last addrnd byte must change the signature (addrnd must be exactly params.N bytes)")
+			}
+
+			// nil rand -> crypto/rand: verifies.
+			s4, err := priv.Sign(nil, msg, nil)
+			if err != nil {
+				t.Fatalf("Sign(nil rand): %v", err)
+			}
+			if !pub.Verify(msg, s4) {
+				t.Fatal("nil-rand (crypto/rand) signature failed verification")
+			}
+
+			// Always-erroring reader -> fail-closed; error reachable via errors.Is.
+			if _, err := priv.Sign(&errReader{err: errSentinel}, msg, nil); !errors.Is(err, errSentinel) {
+				t.Fatalf("erroring reader must fail closed via errors.Is: got %v", err)
+			}
+
+			// Short reader (n-1 bytes then EOF) -> fail-closed via io.EOF. This is
+			// the exact case io.ReadFull would mishandle and the reason this
+			// package routes addrnd through entropy.Fill (slhdsa.go GenerateKey).
+			if _, err := priv.Sign(bytes.NewReader(make([]byte, n-1)), msg, nil); !errors.Is(err, io.EOF) {
+				t.Fatalf("short reader must fail closed via io.EOF: got %v", err)
+			}
+		})
+	}
+}
+
+// TestCryptoSignerDigestValidation verifies the digest-as-PH branch
+// rejects a wrong-length digest with ErrInvalidDigestLength and accepts the
+// exact length.
+func TestCryptoSignerDigestValidation(t *testing.T) {
+	priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+
+	for _, badLen := range []int{0, 16, 31, 33, 64} {
+		_, err := priv.Sign(nil, make([]byte, badLen), &slhdsa.SignerOpts{Hash: slhdsa.HashSHA2_256})
+		if !errors.Is(err, slhdsa.ErrInvalidDigestLength) {
+			t.Errorf("digest len %d: got %v, want ErrInvalidDigestLength", badLen, err)
+		}
+	}
+	if _, err := priv.Sign(nil, make([]byte, 32), &slhdsa.SignerOpts{Hash: slhdsa.HashSHA2_256}); err != nil {
+		t.Fatalf("correct-length (32) digest must be accepted: %v", err)
+	}
+}
+
+// TestCryptoSignerErrorPrecedence pins the guard order in the digest-as-PH path
+// ErrDestroyed > ErrContextTooLong > ErrPreHashNotSupported(BLAKE3) >
+// ErrInvalidHashFunc > ErrInvalidDigestLength.
+func TestCryptoSignerErrorPrecedence(t *testing.T) {
+	longCtx := string(make([]byte, 256))
+
+	dead, _ := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	dead.Destroy()
+	if _, err := dead.Sign(nil, make([]byte, 5), &slhdsa.SignerOpts{Hash: slhdsa.HashFunc(99), Context: longCtx}); err != slhdsa.ErrDestroyed {
+		t.Fatalf("destroyed: want ErrDestroyed, got %v", err)
+	}
+
+	live, _ := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	defer live.Destroy()
+	if _, err := live.Sign(nil, make([]byte, 5), &slhdsa.SignerOpts{Hash: slhdsa.HashSHA2_256, Context: longCtx}); err != slhdsa.ErrContextTooLong {
+		t.Fatalf("long ctx: want ErrContextTooLong, got %v", err)
+	}
+
+	b3, _ := slhdsa.GenerateKey(slhdsa.BLAKE3_128f)
+	defer b3.Destroy()
+	if _, err := b3.Sign(nil, make([]byte, 5), &slhdsa.SignerOpts{Hash: slhdsa.HashFunc(99)}); err != slhdsa.ErrPreHashNotSupported {
+		t.Fatalf("BLAKE3 pre-hash: want ErrPreHashNotSupported, got %v", err)
+	}
+
+	if _, err := live.Sign(nil, make([]byte, 5), &slhdsa.SignerOpts{Hash: slhdsa.HashFunc(99)}); err != slhdsa.ErrInvalidHashFunc {
+		t.Fatalf("invalid hashfunc: want ErrInvalidHashFunc, got %v", err)
+	}
+}
+
+// TestCryptoSignerSHAKEPreHash proves SHAKE pre-hash WORKS via *SignerOpts:
+// there is no crypto.Hash for SHAKE, but Sign reads SignerOpts.Hash
+// directly, so a SHAKE digest-as-PH signs and verifies.
+func TestCryptoSignerSHAKEPreHash(t *testing.T) {
+	priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+	pub := priv.PublicKey()
+
+	msg := []byte("shake pre-hash via SignerOpts")
+	h := sha3.NewShake128()
+	h.Write(msg)
+	d := make([]byte, 32) // SHAKE-128 fixed pre-hash length (FIPS 205 9.2)
+	if _, err := io.ReadFull(h, d); err != nil {
+		t.Fatal(err)
+	}
+	sig, err := priv.Sign(nil, d, &slhdsa.SignerOpts{Hash: slhdsa.HashSHAKE128})
+	if err != nil {
+		t.Fatalf("SHAKE128 digest-as-PH sign: %v", err)
+	}
+	if !pub.VerifyPreHash(msg, sig, slhdsa.HashSHAKE128) {
+		t.Fatal("SHAKE128 pre-hash signature failed verification")
+	}
+}
+
+// TestSignerOptsHashFunc verifies HashFunc() returns the truthful
+// crypto.Hash for SHA2/SHA3 and 0 for SHAKE (no stdlib constant).
+func TestSignerOptsHashFunc(t *testing.T) {
+	cases := []struct {
+		hf   slhdsa.HashFunc
+		want crypto.Hash
+	}{
+		{slhdsa.HashSHA2_224, crypto.SHA224},
+		{slhdsa.HashSHA2_256, crypto.SHA256},
+		{slhdsa.HashSHA2_384, crypto.SHA384},
+		{slhdsa.HashSHA2_512, crypto.SHA512},
+		{slhdsa.HashSHA2_512224, crypto.SHA512_224},
+		{slhdsa.HashSHA2_512256, crypto.SHA512_256},
+		{slhdsa.HashSHA3_224, crypto.SHA3_224},
+		{slhdsa.HashSHA3_256, crypto.SHA3_256},
+		{slhdsa.HashSHA3_384, crypto.SHA3_384},
+		{slhdsa.HashSHA3_512, crypto.SHA3_512},
+		{slhdsa.HashSHAKE128, 0},
+		{slhdsa.HashSHAKE256, 0},
+	}
+	for _, c := range cases {
+		if got := (&slhdsa.SignerOpts{Hash: c.hf}).HashFunc(); got != c.want {
+			t.Errorf("HashFunc(hf=%d): got %d, want %d", c.hf, got, c.want)
+		}
+	}
+	var nilOpts *slhdsa.SignerOpts
+	if nilOpts.HashFunc() != 0 {
+		t.Error("nil SignerOpts.HashFunc() must be 0")
+	}
+}
+
+// TestDigestAsPHAssemblyOracle breaks the shared-assembler circularity:
+// the digest-path M' assembly equals the canonical full-message assembly when
+// digest == hash(msg), and the canonical M' prefix is pinned byte-for-byte.
+func TestDigestAsPHAssemblyOracle(t *testing.T) {
+	msg := []byte("assembly oracle")
+	ctx := "v1"
+	d := sha256.Sum256(msg)
+
+	got := slhdsa.AssembleMPrimePreHashForTest(d[:], slhdsa.HashSHA2_256, ctx)
+	want := slhdsa.MakeMPrimePreHashForTest(msg, slhdsa.HashSHA2_256, ctx)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("digest-path M' != canonical M'\n got:  %x\n want: %x", got, want)
+	}
+
+	// Frozen pin: 0x01 | ctxLen=0x02 | "v1" | OID(SHA-256, 11 bytes), then 32-byte PH.
+	wantPrefix := mustHex(t, "010276310609608648016503040201")
+	if !bytes.HasPrefix(want, wantPrefix) {
+		t.Fatalf("canonical M' prefix mismatch:\n got:        %x\n want prefix: %x", want, wantPrefix)
+	}
+	if len(want) != len(wantPrefix)+32 {
+		t.Fatalf("M' length: got %d, want %d", len(want), len(wantPrefix)+32)
+	}
+}
+
+// TestCryptoSignerConcurrentSharedReader covers the documented concurrent path:
+// crypto/rand.Reader (the realistic shared reader) is concurrency-safe, so
+// sharing it across concurrent Sign calls must be race-clean. Run under -race.
+func TestCryptoSignerConcurrentSharedReader(t *testing.T) {
+	priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+	pub := priv.PublicKey()
+	msg := []byte("concurrent shared reader")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sig, err := priv.Sign(cryptorand.Reader, msg, nil)
+			if err != nil {
+				t.Errorf("concurrent Sign(crypto/rand): %v", err)
+				return
+			}
+			if !pub.Verify(msg, sig) {
+				t.Error("concurrent shared-reader signature failed verification")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestNamedVsDigestPreHashEquivalence proves the named pre-hash entry point and
+// the crypto.Signer digest-as-PH entry point are the same function of
+// (msg, hf, ctx): both verify under the same VerifyPreHashWithContext (same M'),
+// and both bind the context. (Byte-identity is established transitively by
+// TestDigestAsPHAssemblyOracle, since the named path has no rand injection.)
+func TestNamedVsDigestPreHashEquivalence(t *testing.T) {
+	priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+	pub := priv.PublicKey()
+
+	msg := []byte("named vs digest equivalence")
+	ctx := "v1"
+	d := sha256.Sum256(msg)
+
+	sigNamed, err := priv.SignPreHashWithContext(msg, slhdsa.HashSHA2_256, ctx)
+	if err != nil {
+		t.Fatalf("named SignPreHashWithContext: %v", err)
+	}
+	sigDigest, err := priv.Sign(nil, d[:], &slhdsa.SignerOpts{Hash: slhdsa.HashSHA2_256, Context: ctx})
+	if err != nil {
+		t.Fatalf("digest path Sign: %v", err)
+	}
+
+	if !pub.VerifyPreHashWithContext(msg, sigNamed, slhdsa.HashSHA2_256, ctx) {
+		t.Fatal("named-path signature failed verification")
+	}
+	if !pub.VerifyPreHashWithContext(msg, sigDigest, slhdsa.HashSHA2_256, ctx) {
+		t.Fatal("digest-path signature failed verification (named and digest paths must agree on M')")
+	}
+	// Both paths must BIND the context: a wrong ctx fails for the digest path.
+	if pub.VerifyPreHashWithContext(msg, sigDigest, slhdsa.HashSHA2_256, "wrong") {
+		t.Fatal("digest path must bind the context")
+	}
+}
+
+// TestCryptoSignerBranchParity proves the two Sign input branches - a foreign
+// crypto.Hash opts (generic consumer) and a *SignerOpts (native) - produce
+// byte-identical signatures for the same logical hash across ALL 10 mapped
+// SHA2/SHA3 functions, given the same deterministic addrnd.
+func TestCryptoSignerBranchParity(t *testing.T) {
+	priv, err := slhdsa.GenerateKey(slhdsa.SHA2_128f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+	n := int(priv.ParamSet().N())
+
+	cases := []struct {
+		ch crypto.Hash
+		hf slhdsa.HashFunc
+		dl int
+	}{
+		{crypto.SHA224, slhdsa.HashSHA2_224, 28},
+		{crypto.SHA256, slhdsa.HashSHA2_256, 32},
+		{crypto.SHA384, slhdsa.HashSHA2_384, 48},
+		{crypto.SHA512, slhdsa.HashSHA2_512, 64},
+		{crypto.SHA512_224, slhdsa.HashSHA2_512224, 28},
+		{crypto.SHA512_256, slhdsa.HashSHA2_512256, 32},
+		{crypto.SHA3_224, slhdsa.HashSHA3_224, 28},
+		{crypto.SHA3_256, slhdsa.HashSHA3_256, 32},
+		{crypto.SHA3_384, slhdsa.HashSHA3_384, 48},
+		{crypto.SHA3_512, slhdsa.HashSHA3_512, 64},
+	}
+	for _, c := range cases {
+		digest := bytes.Repeat([]byte{0x77}, c.dl)
+		sigGeneric, err := priv.Sign(bytes.NewReader(bytes.Repeat([]byte{0x01}, n)), digest, c.ch)
+		if err != nil {
+			t.Fatalf("%v generic branch: %v", c.ch, err)
+		}
+		sigNative, err := priv.Sign(bytes.NewReader(bytes.Repeat([]byte{0x01}, n)), digest, &slhdsa.SignerOpts{Hash: c.hf})
+		if err != nil {
+			t.Fatalf("%v native branch: %v", c.ch, err)
+		}
+		if !bytes.Equal(sigGeneric, sigNative) {
+			t.Errorf("%v: generic crypto.Hash branch != *SignerOpts branch", c.ch)
+		}
 	}
 }

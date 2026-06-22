@@ -127,7 +127,7 @@ func TestSeecDrawer_PurposePassthrough(t *testing.T) {
 	}
 }
 
-// TestSeecDrawer_ChunkedPRFIndexSeparation pins the H-6 property: with the
+// TestSeecDrawer_ChunkedPRFIndexSeparation pins the chunk-index-separation property: with the
 // built-in SEECPRF under a DEAD rng (same r every call), two equal-size
 // chunks of one wide draw MUST differ, because the chunk index is bound
 // into the per-chunk Expand info. Without index binding a 510-byte seed
@@ -141,7 +141,7 @@ func TestSeecDrawer_ChunkedPRFIndexSeparation(t *testing.T) {
 		t.Fatalf("draw: %v", err)
 	}
 	if bytes.Equal(out[:255], out[255:]) {
-		t.Fatal("equal-size chunks of one draw are byte-identical under a dead rng: chunk index not bound (H-6)")
+		t.Fatal("equal-size chunks of one draw are byte-identical under a dead rng: chunk index not bound")
 	}
 
 	// The chunked draw is exactly the composition of genRandChunk calls
@@ -397,6 +397,7 @@ func (badCoinsLenKEM) PubKeyLen() int                          { return 32 }
 func (badCoinsLenKEM) SecretKeyLen() int                       { return 32 }
 func (badCoinsLenKEM) CiphertextLen() int                      { return 32 }
 func (badCoinsLenKEM) SharedSecretLen() int                    { return 32 }
+func (badCoinsLenKEM) ValidatePublicKey([]byte) error          { return nil }
 func (badCoinsLenKEM) EncapsCoinsLen() int                     { return 0 }
 func (badCoinsLenKEM) EncapsulateWithCoins(_, _ []byte) ([]byte, []byte, error) {
 	return nil, nil, nil

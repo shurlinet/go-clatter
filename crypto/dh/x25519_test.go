@@ -97,6 +97,13 @@ func TestX25519_PubKeyLen(t *testing.T) {
 	}
 }
 
+func TestX25519_SecretKeyLen(t *testing.T) {
+	x := NewX25519()
+	if x.SecretKeyLen() != 32 {
+		t.Fatalf("expected 32, got %d", x.SecretKeyLen())
+	}
+}
+
 // TestX25519_DH_RejectsLowOrderPoints pins the low-order rejection
 // behavior: DH against a small-order peer public key returns
 // ErrDHLowOrder (the Noise spec section 4.1 permits either continuing

@@ -1,7 +1,9 @@
 package clatter_test
 
 import (
+	"bytes"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	clatter "github.com/shurlinet/go-clatter"
@@ -937,7 +939,7 @@ func truncHex(s string, maxLen int) string {
 
 // TestPqHandshake_IK_AesSha512_RoundTrip exercises the AES-GCM + SHA-512
 // suite variant end-to-end (the NQ family has the same variant test;
-// pqSuiteAesSha512 existed for this since Batch 4 but was never wired).
+// pqSuiteAesSha512 already existed for this but was never wired).
 func TestPqHandshake_IK_AesSha512_RoundTrip(t *testing.T) {
 	suite := pqSuiteAesSha512()
 	buf := make([]byte, 65535)
@@ -984,4 +986,206 @@ func TestPqHandshake_IK_AesSha512_RoundTrip(t *testing.T) {
 	tsI, _ := i.Finalize()
 	tsR, _ := r.Finalize()
 	verifyTransport(t, tsI, tsR)
+}
+
+// --- WithEphemeralKEMKey tests ---
+
+// TestPqHandshake_WithEphemeralKEMKey_NN_RoundTrip verifies that a pre-set
+// KEM ephemeral produces a working handshake end-to-end.
+func TestPqHandshake_WithEphemeralKEMKey_NN_RoundTrip(t *testing.T) {
+	suite := pqSuiteProd()
+
+	ekp, err := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xAA))
+	if err != nil {
+		t.Fatalf("gen ephemeral: %v", err)
+	}
+
+	i, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithEphemeralKEMKey(ekp))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	r, err := clatter.NewPqHandshake(clatter.PatternPqNN, false, suite)
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "pqNN_presetEph")
+}
+
+// TestPqHandshake_WithEphemeralKEMKey_Deterministic verifies that the same
+// pre-set ephemeral produces identical wire bytes across two handshakes.
+func TestPqHandshake_WithEphemeralKEMKey_Deterministic(t *testing.T) {
+	suite := pqSuiteChachaSha256()
+
+	ekp, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xBB))
+
+	run := func() []byte {
+		rng := clatter.NewDummyRng(0xCC)
+		i, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+			clatter.WithEphemeralKEMKey(ekp),
+			clatter.WithRNG(rng))
+		if err != nil {
+			t.Fatalf("initiator: %v", err)
+		}
+		buf := make([]byte, 65535)
+		n, err := i.WriteMessage(nil, buf)
+		if err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		out := make([]byte, n)
+		copy(out, buf[:n])
+		return out
+	}
+
+	wire1 := run()
+	wire2 := run()
+	if !bytes.Equal(wire1, wire2) {
+		t.Fatal("pre-set ephemeral must produce identical wire bytes")
+	}
+}
+
+// TestPqHandshake_WithEphemeralKEMKey_WireEquivalence proves the pre-set path
+// is byte-identical to the generate-from-RNG path: a key pre-set via
+// WithEphemeralKEMKey produces the exact same msg0 as letting the handshake
+// generate that same key from the same RNG seed. This is the strong form of
+// "pre-set produces expected wire bytes" - it pins the pre-set path to the
+// already-vector-verified generated path, not merely to itself.
+func TestPqHandshake_WithEphemeralKEMKey_WireEquivalence(t *testing.T) {
+	suite := pqSuiteChachaSha256()
+	const seed = 0xC0FFEE
+
+	// Path A: generate the ephemeral from the seed, pre-set it.
+	ekp, err := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(seed))
+	if err != nil {
+		t.Fatalf("gen ephemeral: %v", err)
+	}
+	iPre, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithEphemeralKEMKey(ekp))
+	if err != nil {
+		t.Fatalf("preset initiator: %v", err)
+	}
+	bufA := make([]byte, 65535)
+	nA, err := iPre.WriteMessage(nil, bufA)
+	if err != nil {
+		t.Fatalf("preset write: %v", err)
+	}
+
+	// Path B: no pre-set; the handshake generates the ephemeral from the
+	// same seed via WithRNG. msg0 in pqNN is purely the ephemeral pubkey,
+	// so the first (and only) rng draw is that keygen.
+	iGen, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithRNG(clatter.NewDummyRng(seed)))
+	if err != nil {
+		t.Fatalf("generated initiator: %v", err)
+	}
+	bufB := make([]byte, 65535)
+	nB, err := iGen.WriteMessage(nil, bufB)
+	if err != nil {
+		t.Fatalf("generated write: %v", err)
+	}
+
+	if !bytes.Equal(bufA[:nA], bufB[:nB]) {
+		t.Fatalf("pre-set path not wire-identical to generated path:\n  preset:    %x\n  generated: %x", bufA[:nA], bufB[:nB])
+	}
+}
+
+// TestPqHandshake_WithEphemeralKEMKey_DoubleSet verifies the new option's
+// double-set protection: passing WithEphemeralKEMKey twice uses the SECOND
+// key (the first clone is destroyed, not leaked, and not used). Confirmed by
+// comparing msg0 against a reference handshake that sets only the second key.
+func TestPqHandshake_WithEphemeralKEMKey_DoubleSet(t *testing.T) {
+	suite := pqSuiteChachaSha256()
+
+	kp1, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0x111))
+	kp2, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0x222))
+
+	iDouble, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithEphemeralKEMKey(kp1),
+		clatter.WithEphemeralKEMKey(kp2))
+	if err != nil {
+		t.Fatalf("double-set initiator: %v", err)
+	}
+	bufD := make([]byte, 65535)
+	nD, err := iDouble.WriteMessage(nil, bufD)
+	if err != nil {
+		t.Fatalf("double-set write: %v", err)
+	}
+
+	iRef, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithEphemeralKEMKey(kp2))
+	if err != nil {
+		t.Fatalf("ref initiator: %v", err)
+	}
+	bufR := make([]byte, 65535)
+	nR, err := iRef.WriteMessage(nil, bufR)
+	if err != nil {
+		t.Fatalf("ref write: %v", err)
+	}
+
+	if !bytes.Equal(bufD[:nD], bufR[:nR]) {
+		t.Fatal("double-set WithEphemeralKEMKey did not use the second key")
+	}
+}
+
+// TestPqHandshake_WithEphemeralKEMKey_WrongPubLen rejects wrong public key length.
+func TestPqHandshake_WithEphemeralKEMKey_WrongPubLen(t *testing.T) {
+	suite := pqSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, 16), make([]byte, 64))
+	_, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithEphemeralKEMKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestPqHandshake_WithEphemeralKEMKey_WrongSecretLen rejects wrong secret key length.
+func TestPqHandshake_WithEphemeralKEMKey_WrongSecretLen(t *testing.T) {
+	suite := pqSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, suite.EKEM.PubKeyLen()), make([]byte, 32))
+	_, err := clatter.NewPqHandshake(clatter.PatternPqNN, true, suite,
+		clatter.WithEphemeralKEMKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestPqHandshake_StaticKey_WrongSecretLen rejects wrong static secret length.
+func TestPqHandshake_StaticKey_WrongSecretLen(t *testing.T) {
+	suite := pqSuiteProd()
+	badKP := clatter.NewKeyPair(make([]byte, suite.SKEM.PubKeyLen()), make([]byte, 16))
+	_, err := clatter.NewPqHandshake(clatter.PatternPqXX, true, suite,
+		clatter.WithStaticKey(badKP))
+	if !errors.Is(err, clatter.ErrInvalidKeyLength) {
+		t.Fatalf("want ErrInvalidKeyLength, got %v", err)
+	}
+}
+
+// TestPqHandshake_WithEphemeralKEMKey_NNpsk2_RoundTrip verifies pre-set
+// ephemeral + PSK satisfies the ownRandApplied requirement.
+func TestPqHandshake_WithEphemeralKEMKey_NNpsk2_RoundTrip(t *testing.T) {
+	suite := pqSuiteProd()
+
+	ekp, _ := suite.EKEM.GenerateKeypair(clatter.NewDummyRng(0xDD))
+	psk := make([]byte, clatter.PSKLen)
+	psk[0] = 0x42
+
+	i, err := clatter.NewPqHandshake(clatter.PatternPqNNpsk2, true, suite,
+		clatter.WithEphemeralKEMKey(ekp))
+	if err != nil {
+		t.Fatalf("initiator: %v", err)
+	}
+	if err := i.PushPSK(psk); err != nil {
+		t.Fatalf("initiator PushPSK: %v", err)
+	}
+
+	r, err := clatter.NewPqHandshake(clatter.PatternPqNNpsk2, false, suite)
+	if err != nil {
+		t.Fatalf("responder: %v", err)
+	}
+	if err := r.PushPSK(psk); err != nil {
+		t.Fatalf("responder PushPSK: %v", err)
+	}
+
+	verifyHandshake(t, i, r, "pqNNpsk2_presetEph")
 }

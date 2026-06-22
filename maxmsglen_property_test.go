@@ -332,14 +332,12 @@ func TestPropertyMaxMsgLen(t *testing.T) {
 				aliceS, _ := x.GenerateKeypair(crand.Reader)
 				bobS, _ := x.GenerateKeypair(crand.Reader)
 				_, err = clatter.NewNqHandshake(p, true, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+					append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("initiator at maxOH-1=%d: expected ErrInvalidPattern, got %v", maxOH-1, err)
 				}
 				_, err = clatter.NewNqHandshake(p, false, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+					append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("responder at maxOH-1=%d: expected ErrInvalidPattern, got %v", maxOH-1, err)
 				}
@@ -348,14 +346,12 @@ func TestPropertyMaxMsgLen(t *testing.T) {
 				aliceS, _ := k.GenerateKeypair(crand.Reader)
 				bobS, _ := k.GenerateKeypair(crand.Reader)
 				_, err = clatter.NewPqHandshake(p, true, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+					append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("initiator at maxOH-1=%d: expected ErrInvalidPattern, got %v", maxOH-1, err)
 				}
 				_, err = clatter.NewPqHandshake(p, false, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+					append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("responder at maxOH-1=%d: expected ErrInvalidPattern, got %v", maxOH-1, err)
 				}
@@ -366,16 +362,12 @@ func TestPropertyMaxMsgLen(t *testing.T) {
 				aliceKEM, _ := k.GenerateKeypair(crand.Reader)
 				bobKEM, _ := k.GenerateKeypair(crand.Reader)
 				_, err = clatter.NewHybridHandshake(p, true, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(aliceDH), clatter.WithRemoteStatic(bobDH.Public),
-					clatter.WithStaticKEMKey(aliceKEM), clatter.WithRemoteStaticKEMKey(bobKEM.Public))
+					append(hybridStaticOpts(p, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("initiator at maxOH-1=%d: expected ErrInvalidPattern, got %v", maxOH-1, err)
 				}
 				_, err = clatter.NewHybridHandshake(p, false, s,
-					clatter.WithMaxMessageLen(maxOH-1),
-					clatter.WithStaticKey(bobDH), clatter.WithRemoteStatic(aliceDH.Public),
-					clatter.WithStaticKEMKey(bobKEM), clatter.WithRemoteStaticKEMKey(aliceKEM.Public))
+					append(hybridStaticOpts(p, false, bobDH, aliceDH.Public, bobKEM, aliceKEM.Public), clatter.WithMaxMessageLen(maxOH-1))...)
 				if !errors.Is(err, clatter.ErrInvalidPattern) {
 					t.Fatalf("responder at maxOH-1=%d: expected ErrInvalidPattern, got %v", maxOH-1, err)
 				}
@@ -417,10 +409,11 @@ func TestPropertyMaxMsgLen(t *testing.T) {
 	}
 }
 
-// constructPair creates alice (initiator) and bob (responder) handshakes
-// with over-provisioned keys for the given pattern and maxMsgLen. Keys are
-// generated for all roles regardless of whether the pattern requires them
-// (unused keys are silently ignored by constructors).
+// constructPair creates alice (initiator) and bob (responder) handshakes for the
+// given pattern and maxMsgLen. Keys are generated for all roles, but each static
+// option is passed only to the (pattern, role) pairs that consume it (via
+// singleStaticOpts/hybridStaticOpts), since the constructors now reject an
+// inapplicable static rather than silently ignoring it.
 func constructPair(t *testing.T, p *clatter.HandshakePattern, maxMsgLen int,
 	x clatter.DH, k clatter.KEM) (clatter.Handshaker, clatter.Handshaker) {
 	t.Helper()
@@ -431,14 +424,12 @@ func constructPair(t *testing.T, p *clatter.HandshakePattern, maxMsgLen int,
 		aliceS, _ := x.GenerateKeypair(crand.Reader)
 		bobS, _ := x.GenerateKeypair(crand.Reader)
 		alice, err := clatter.NewNqHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+			append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("NQ initiator construct: %v", err)
 		}
 		bob, err := clatter.NewNqHandshake(p, false, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+			append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("NQ responder construct: %v", err)
 		}
@@ -449,14 +440,12 @@ func constructPair(t *testing.T, p *clatter.HandshakePattern, maxMsgLen int,
 		aliceS, _ := k.GenerateKeypair(crand.Reader)
 		bobS, _ := k.GenerateKeypair(crand.Reader)
 		alice, err := clatter.NewPqHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceS), clatter.WithRemoteStatic(bobS.Public))
+			append(singleStaticOpts(p, true, aliceS, bobS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("PQ initiator construct: %v", err)
 		}
 		bob, err := clatter.NewPqHandshake(p, false, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(bobS), clatter.WithRemoteStatic(aliceS.Public))
+			append(singleStaticOpts(p, false, bobS, aliceS.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("PQ responder construct: %v", err)
 		}
@@ -469,16 +458,12 @@ func constructPair(t *testing.T, p *clatter.HandshakePattern, maxMsgLen int,
 		aliceKEM, _ := k.GenerateKeypair(crand.Reader)
 		bobKEM, _ := k.GenerateKeypair(crand.Reader)
 		alice, err := clatter.NewHybridHandshake(p, true, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(aliceDH), clatter.WithRemoteStatic(bobDH.Public),
-			clatter.WithStaticKEMKey(aliceKEM), clatter.WithRemoteStaticKEMKey(bobKEM.Public))
+			append(hybridStaticOpts(p, true, aliceDH, bobDH.Public, aliceKEM, bobKEM.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("Hybrid initiator construct: %v", err)
 		}
 		bob, err := clatter.NewHybridHandshake(p, false, s,
-			clatter.WithMaxMessageLen(maxMsgLen),
-			clatter.WithStaticKey(bobDH), clatter.WithRemoteStatic(aliceDH.Public),
-			clatter.WithStaticKEMKey(bobKEM), clatter.WithRemoteStaticKEMKey(aliceKEM.Public))
+			append(hybridStaticOpts(p, false, bobDH, aliceDH.Public, bobKEM, aliceKEM.Public), clatter.WithMaxMessageLen(maxMsgLen))...)
 		if err != nil {
 			t.Fatalf("Hybrid responder construct: %v", err)
 		}
