@@ -6,7 +6,7 @@ require (
 	filippo.io/mldsa v1.0.0
 	github.com/shurlinet/go-hqc v0.1.1
 	golang.org/x/crypto v0.57.0
-	lukechampine.com/blake3 v1.4.1
+	lukechampine.com/blake3 v1.5.3
 )
 
 require (
